@@ -502,6 +502,46 @@ route('GET', '/api/users/:handle', 'user', async (req, res, me, h) => {
   const posts = Object.values(db.posts).filter(p => p.userId === u.id).sort((a, b) => b.ts - a.ts);
   send(res, 200, { user: pubUser(u, me), posts: posts.map(p => pubPost(p, me)) });
 });
+const isMutual = (a, b) => a.follows.includes(b.id) && b.follows.includes(a.id);
+const followRow = (u, me) => ({ ...lite(u), isFollowing: me.follows.includes(u.id), followsMe: u.follows.includes(me.id), isMe: u.id === me.id });
+route('GET', '/api/users/:handle/followers', 'user', async (req, res, me, h) => {
+  const u = byHandle(decodeURIComponent(h)); need(u && !u.banned, 404, 'Пользователь не найден');
+  const list = Object.values(db.users).filter(x => !x.banned && x.follows.includes(u.id))
+    .sort((a, b) => (b.id === me.id) - (a.id === me.id) || me.follows.includes(b.id) - me.follows.includes(a.id) || a.handle.localeCompare(b.handle));
+  send(res, 200, { users: list.slice(0, 2000).map(x => followRow(x, me)), total: list.length });
+});
+route('GET', '/api/users/:handle/following', 'user', async (req, res, me, h) => {
+  const u = byHandle(decodeURIComponent(h)); need(u && !u.banned, 404, 'Пользователь не найден');
+  const list = u.follows.map(id => db.users[id]).filter(x => x && !x.banned)
+    .sort((a, b) => (b.id === me.id) - (a.id === me.id) || me.follows.includes(b.id) - me.follows.includes(a.id) || a.handle.localeCompare(b.handle));
+  send(res, 200, { users: list.slice(0, 2000).map(x => followRow(x, me)), total: list.length });
+});
+route('GET', '/api/me/mutuals', 'user', async (req, res, me) => {
+  const list = me.follows.map(id => db.users[id]).filter(x => x && !x.banned && !x.official && x.follows.includes(me.id));
+  // recently shared-with first
+  const recent = me.shareRecent || [];
+  list.sort((a, b) => ((recent.indexOf(a.id) + 1 || 999) - (recent.indexOf(b.id) + 1 || 999)) || a.handle.localeCompare(b.handle));
+  send(res, 200, { users: list.map(lite) });
+});
+route('POST', '/api/posts/:id/share', 'user', async (req, res, me, id) => {
+  const p = findPost(id);
+  need(!limited(req, 'share:' + me.id, 60, 3600e3), 429, 'Слишком много отправок. Подождите немного');
+  const b = await readJson(req);
+  const ids = [...new Set(Array.isArray(b.to) ? b.to : [])].slice(0, 20);
+  need(ids.length, 400, 'Выберите, кому отправить');
+  const text = clean(b.text, 300);
+  let sent = 0;
+  for (const uid of ids) {
+    const u = db.users[uid];
+    if (!u || u.banned || u.id === me.id || !isMutual(me, u)) continue;
+    addActivity(u.id, { type: 'share', fromId: me.id, postId: p.id, text });
+    notify(u.id, `📨 ${at(me)} отправил(-а) вам ${p.type === 'reel' ? 'рилс' : 'пост'}${text ? ':\n' + htmlEsc(text) : ''}`, '?p=' + p.id, p.type === 'reel' ? 'Смотреть' : 'Открыть');
+    sent++;
+  }
+  need(sent, 400, 'Отправлять можно только тем, с кем у вас взаимная подписка');
+  me.shareRecent = [...ids.filter(x => db.users[x]), ...(me.shareRecent || []).filter(x => !ids.includes(x))].slice(0, 20);
+  save(); send(res, 200, { sent });
+});
 route('POST', '/api/users/:handle/follow', 'user', async (req, res, me, h) => {
   const u = byHandle(decodeURIComponent(h)); need(u && !u.banned && u.id !== me.id, 404, 'Пользователь не найден');
   const i = me.follows.indexOf(u.id); if (i >= 0) me.follows.splice(i, 1); else me.follows.push(u.id);

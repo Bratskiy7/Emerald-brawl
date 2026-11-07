@@ -157,6 +157,8 @@ body::before{content:"";position:fixed;inset:0 0 auto;height:env(safe-area-inset
 .stats{display:grid;grid-template-columns:repeat(3,1fr);flex:1;text-align:center}
 .stats b{display:block;font-size:18px;font-weight:800;font-variant-numeric:tabular-nums}
 .stats span{font-size:12px;color:var(--muted)}
+.stats button{display:block;width:100%;border-radius:10px;padding:2px 0}
+.stats button:hover{background:var(--soft)}
 .pname{font-weight:800;font-size:15px}
 .pbio{margin:2px 0 0;font-size:14px;white-space:pre-line;overflow-wrap:anywhere}
 .btns{display:flex;gap:8px;flex-wrap:wrap}
@@ -585,7 +587,7 @@ async function profileView(h){
   const me=u.isMe;if(me){try{ME=(await api('me')).me;}catch(e){}}
   const head=me?`<h1 class="big-vb">${hnd(u)}</h1><div class="row">${themeBtn()}<button class="ibtn" data-act="sub" data-sub="settings" aria-label="Настройки">${I.gear}</button></div>`:`${backBtn()}<h1 class="big-vb">${hnd(u)}</h1><span style="width:40px"></span>`;
   let body=`<div class="prow"><img class="big" src="${avOf(u)}" alt="">
-      <div class="stats"><div><b>${num(u.posts)}</b><span>${plural(u.posts,['публикация','публикации','публикаций'])}</span></div><div><b>${num(u.followers)}</b><span>${plural(u.followers,['подписчик','подписчика','подписчиков'])}</span></div><div><b>${num(u.following)}</b><span>подписки</span></div></div></div>
+      <div class="stats"><div><b>${num(u.posts)}</b><span>${plural(u.posts,['публикация','публикации','публикаций'])}</span></div><button data-act="follows" data-h="${esc(u.handle)}" data-k="followers"><b>${num(u.followers)}</b><span>${plural(u.followers,['подписчик','подписчика','подписчиков'])}</span></button><button data-act="follows" data-h="${esc(u.handle)}" data-k="following"><b>${num(u.following)}</b><span>подписки</span></button></div></div>
       <div><div class="pname">${esc(u.name)}${u.official?'<span class="offl">официальный канал</span>':''}</div>${badgesHTML(u.badges)}${u.bio?`<p class="pbio">${rich(u.bio)}</p>`:''}</div>`;
   if(me){
     body+=`<div class="btns"><button class="btn" data-act="sub" data-sub="settings">Редактировать</button><button class="btn" data-act="sub" data-sub="support">Поддержка${ME.supportUnread?`<span class="n">${ME.supportUnread}</span>`:''}</button></div>`;
@@ -885,6 +887,44 @@ function reportSheet(id){
 async function copyText(t,okMsg){try{await navigator.clipboard.writeText(t);toast(okMsg||'Скопировано');}catch(x){toast('Не удалось скопировать: выделите текст вручную');}}
 
 const bcBody=()=>({title:$('#bc-title').value,text:$('#bc-text').value,channels:{app:$('#bc-app').checked,tg:$('#bc-tg').checked,email:$('#bc-email').checked,post:$('#bc-post').checked}});
+/* ---------- share to mutuals & follow lists ---------- */
+async function shareSheet(id){
+  const p=posts[id];
+  const o=sheet(p&&p.type==='reel'?'Отправить рилс':'Отправить пост',loading(),`<form class="cform gut" id="shf" style="flex-direction:column;align-items:stretch;gap:8px"><input id="sh-text" maxlength="300" placeholder="Добавить сообщение (необязательно)" autocomplete="off"><button class="btn pri" id="sh-btn" style="min-height:44px" disabled>Выберите, кому отправить</button></form>`);
+  const body=o.querySelector('.body');const chosen=new Set();
+  const btn=o.querySelector('#sh-btn');const upd=()=>{btn.disabled=!chosen.size;btn.textContent=chosen.size?`Отправить (${chosen.size})`:'Выберите, кому отправить';};
+  let users=[];
+  try{users=(await api('me/mutuals')).users;}catch(x){body.innerHTML=errBox(x.message);return;}
+  const paint=q=>{const list=users.filter(u=>!q||u.handle.includes(q)||u.name.toLowerCase().includes(q));
+    body.innerHTML=`<button class="urow" data-act="sharecopy" data-id="${id}" style="padding:4px 0"><span class="av" style="display:grid;place-items:center;background:var(--soft);width:44px;height:44px;border-radius:50%">🔗</span><span><b>Скопировать ссылку</b><small>Отправить куда угодно</small></span></button>
+      ${users.length?`<div class="search" style="padding-block:4px">${I.search}<input id="sh-q" type="search" placeholder="Поиск" value="${esc(q||'')}" autocomplete="off"></div>
+      <div class="ulist">${list.map(u=>`<label class="urow" style="cursor:pointer"><img class="av" src="${avOf(u)}" alt=""><span style="flex:1;min-width:0"><b>${hnd(u)}</b><small>${esc(u.name)}</small></span><input type="checkbox" data-uid="${u.id}" ${chosen.has(u.id)?'checked':''} style="width:22px;height:22px;accent-color:var(--accent)"></label>`).join('')||'<div class="empty" style="padding:16px">Никого не нашли</div>'}</div>`
+      :`<div class="empty" style="padding:16px"><strong>Пока не с кем поделиться</strong>Отправлять можно тем, с кем у вас взаимная подписка: вы подписаны друг на друга</div>`}`;
+    body.querySelectorAll('input[data-uid]').forEach(c=>c.addEventListener('change',()=>{c.checked?chosen.add(c.dataset.uid):chosen.delete(c.dataset.uid);upd();}));
+    const qi=body.querySelector('#sh-q');if(qi&&q!==undefined){qi.focus();qi.setSelectionRange(qi.value.length,qi.value.length);}
+    if(qi)qi.addEventListener('input',()=>paint(qi.value.trim().toLowerCase()));};
+  paint();
+  o.querySelector('#shf').addEventListener('submit',async e=>{e.preventDefault();if(!chosen.size)return;btn.disabled=true;
+    try{const d=await api('posts/'+id+'/share',{body:{to:[...chosen],text:o.querySelector('#sh-text').value}});closeOv();toast(d.sent===1?'Отправлено':'Отправлено '+d.sent+' '+plural(d.sent,['человеку','людям','людям']));}
+    catch(x){toast(x.message);upd();}});
+}
+async function followsSheet(handle,kind){
+  const o=sheet('@'+handle,`<div class="seg" style="margin-bottom:4px"><button data-act="followtab" data-h="${esc(handle)}" data-k="followers" aria-pressed="${kind==='followers'}">Подписчики</button><button data-act="followtab" data-h="${esc(handle)}" data-k="following" aria-pressed="${kind==='following'}">Подписки</button></div><div id="fl">${loading()}</div>`);
+  o.querySelector('.sheet').style.maxHeight='92%';
+  try{
+    const d=await api('users/'+encodeURIComponent(handle)+'/'+kind);
+    const fl=o.querySelector('#fl');
+    const paint=q=>{const list=d.users.filter(u=>!q||u.handle.includes(q)||u.name.toLowerCase().includes(q));
+      fl.innerHTML=`${d.total>8?`<div class="search" style="padding-block:6px">${I.search}<input id="fl-q" type="search" placeholder="Поиск" value="${esc(q||'')}" autocomplete="off"></div>`:''}
+      <div class="ulist">${list.map(u=>`<div style="display:flex;align-items:center;gap:10px"><button class="urow" style="flex:1" data-act="user" data-h="${esc(u.handle)}"><img class="av" src="${avOf(u)}" alt=""><span style="min-width:0"><b>${hnd(u)}</b><small>${esc(u.name)}${u.followsMe&&!u.isMe?' · подписан(а) на вас':''}</small></span></button>
+        ${u.isMe?'<span class="pill">это вы</span>':`<button class="btn sm${u.isFollowing?'':' pri'}" data-act="followinlist" data-h="${esc(u.handle)}">${u.isFollowing?'Вы подписаны':u.followsMe?'Подписаться в ответ':'Подписаться'}</button>`}</div>`).join('')
+        ||`<div class="empty" style="padding:20px">${q?'Никого не нашли':kind==='followers'?'Подписчиков пока нет':'Пока ни на кого не подписан(а)'}</div>`}</div>`;
+      const qi=fl.querySelector('#fl-q');if(qi&&q!==undefined){qi.focus();qi.setSelectionRange(qi.value.length,qi.value.length);}
+      if(qi)qi.addEventListener('input',()=>paint(qi.value.trim().toLowerCase()));};
+    paint();
+  }catch(x){o.querySelector('#fl').innerHTML=errBox(x.message);}
+}
+
 /* ---------- admin mailbox ---------- */
 async function adminMailView(){
   const d=await api('admin/mail/'+S.mailId);const m=d.mail;refreshMe();
@@ -914,7 +954,7 @@ function composeSheet(){
 async function activityView(){
   const d=await api('activity');ME.activityUnread=0;
   const verb=a=>({like:`оценил(-а) ваш ${a.post&&a.post.type==='reel'?'рилс':'пост'}`,comment:`прокомментировал(-а): «${esc(a.text)}»`,mention:`упомянул(-а) вас: «${esc(a.text)}»`,
-    follow:'подписался(-ась) на вас',invite:'зарегистрировался(-ась) по вашему приглашению',announce:`<span style="white-space:pre-line">📣 ${esc(a.text)}</span>`,newpost:`📣 ${esc(a.text)}`}[a.type]||'');
+    follow:'подписался(-ась) на вас',invite:'зарегистрировался(-ась) по вашему приглашению',announce:`<span style="white-space:pre-line">📣 ${esc(a.text)}</span>`,share:`📨 отправил(-а) вам ${a.post&&a.post.type==='reel'?'рилс':'пост'}${a.text?`: «${esc(a.text)}»`:''}`,newpost:`📣 ${esc(a.text)}`}[a.type]||'');
   const row=a=>`<div class="act${a.read?'':' unread'}"><button data-act="user" data-h="${esc(a.from.handle)}"><img class="av" src="${avOf(a.from)}" alt=""></button>
     <p><b data-act="user" data-h="${esc(a.from.handle)}" style="cursor:pointer">${hnd(a.from)}</b> ${verb(a)}<small>${ago(a.ts)}</small></p>
     ${a.post?`<button data-act="${a.type==='comment'||a.type==='mention'?'actcomments':a.post.type==='reel'?'openreel':'open'}" data-id="${a.post.id}" aria-label="Открыть">${a.post.type==='text'?'<span class="thx" style="display:block"></span>':a.post.type==='reel'?`<video class="th av-play" src="${esc(a.post.media)}" poster="${NOPOSTER}" muted loop playsinline preload="metadata"></video>`:`<img class="th" src="${esc(a.post.media)}" alt="">`}</button>`
@@ -1072,8 +1112,8 @@ document.addEventListener('click',async e=>{
     case 'like':like(id);break;
     case 'save':{const p=posts[id];const d=await api('posts/'+id+'/save',{body:{}});updatePost({...p,saved:d.saved});if(d.saved)toast('Сохранено. Ищите в профиле, вкладка с закладкой');break;}
     case 'comments':openComments(id);break;
-    case 'share':{const p=posts[id],txt=`${p.author.handle} в Кадре: ${p.cap||''}\n${location.origin+location.pathname}`;
-      try{await navigator.clipboard.writeText(txt);toast('Ссылка скопирована');}catch(x){toast('Не удалось скопировать');}break;}
+    case 'share':shareSheet(id);break;
+    case 'sharecopy':{closeOv();copyText(location.origin+location.pathname+'?p='+a.dataset.id,'Ссылка скопирована');break;}
     case 'photo':{const now=Date.now();if(lastTap.id===id&&now-lastTap.t<320){like(id,true);burst(a);lastTap={id:null,t:0};}else lastTap={id,t:now};break;}
     case 'rtap':{const el=a.closest('.reel'),now=Date.now();
       if(lastTap.id===id&&now-lastTap.t<300){clearTimeout(tapT);lastTap={id:null,t:0};like(id,true);burst(el);break;}
@@ -1104,6 +1144,10 @@ document.addEventListener('click',async e=>{
     case 'actcomments':openComments(a.dataset.id);break;
     case 'resetagain':S.resetHandle=null;showReset();break;
     case 'verifyemail':verifySheet();break;
+    case 'follows':followsSheet(a.dataset.h,a.dataset.k);break;
+    case 'followtab':followsSheet(a.dataset.h,a.dataset.k);break;
+    case 'followinlist':{const h=a.dataset.h;const d=await api('users/'+encodeURIComponent(h)+'/follow',{body:{}});
+      a.classList.toggle('pri',!d.user.isFollowing);a.textContent=d.user.isFollowing?'Вы подписаны':'Подписаться';toast(d.user.isFollowing?'Вы подписались на '+h:'Подписка отменена');break;}
     case 'mailbox':S.mailBox=a.dataset.b;render(true);break;
     case 'newsemail':{const d=await api('me',{method:'PATCH',body:{newsEmail:a.checked}});ME=d.me;toast(a.checked?'Будем присылать новости Кадра':'Новости на почту отключены');break;}
     case 'bctest':{const f=$('#bcf');const er=$('#bc-err');er.hidden=true;
