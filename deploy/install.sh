@@ -7,7 +7,8 @@ set -euo pipefail
 SRC="$(cd "$(dirname "$0")/.." && pwd)"
 APP=/opt/kadr
 DOMAIN="${KADR_DOMAIN:-kadr.193-247-73-123.sslip.io}"
-PORT="${KADR_PORT:-3200}"
+OLD_PORT="$(sed -n 's/^Environment=PORT=//p' /etc/systemd/system/kadr.service 2>/dev/null || true)"
+PORT="${KADR_PORT:-${OLD_PORT:-3200}}"
 
 command -v node >/dev/null || { echo "Нет Node.js. Он должен быть уже установлен для S-Message."; exit 1; }
 

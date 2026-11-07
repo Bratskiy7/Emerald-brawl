@@ -332,6 +332,7 @@ const OFFICIAL_AV=(()=>{const c=document.createElement('canvas');c.width=c.heigh
   if(g){g.addColorStop(0,'#3246E6');g.addColorStop(.35,'#F0A33A');g.addColorStop(.7,'#E5334B');g.addColorStop(1,'#3246E6');x.fillStyle=g;}else x.fillStyle='#3246E6';
   x.fillRect(0,0,160,160);x.fillStyle='#fff';x.beginPath();x.roundRect?x.roundRect(36,36,88,88,26):x.rect(36,36,88,88);x.fill();x.fillStyle='#3246E6';x.beginPath();x.arc(80,80,22,0,7);x.fill();return c.toDataURL('image/png');})();
 const hnd=u=>esc(u.handle)+(u.verified?VB:'');
+const APK_URL='https://github.com/Bratskiy7/Emerald-brawl/releases/latest/download/kadr.apk';
 const isVideo=m=>/\.(mp4|webm|mov)$/i.test(m||'');
 
 /* ---------- api ---------- */
@@ -500,6 +501,7 @@ function settingsView(){
     <p class="err" id="p-err" hidden></p>
     <button class="btn" style="min-height:44px">Сменить пароль</button>
   </form>
+  ${/KadrApp/.test(navigator.userAgent)?'':`<div class="card"><h3>Приложение для Android</h3><p>Кадр как отдельное приложение: значок на главном экране, без адресной строки браузера.</p><a class="btn pri" style="display:grid;place-items:center;min-height:44px;text-decoration:none" href="${APK_URL}" target="_blank" rel="noopener">Скачать APK</a></div>`}
   <button class="btn danger" style="min-height:44px" data-act="logout">Выйти из аккаунта</button></div>`;
 }
 /* support (user side) */
@@ -804,6 +806,17 @@ $('#avfile').addEventListener('change',async e=>{const f=e.target.files[0];e.tar
 /* ---------- live badges ---------- */
 async function refreshMe(){try{const d=await api('me');const before=(ME.supportUnread||0)+'/'+(ME.adminOpen||0);ME=d.me;if(before!==(ME.supportUnread||0)+'/'+(ME.adminOpen||0)){tabsHTML();if(ME.supportUnread&&!S.sub)toast('Поддержка ответила на ваше обращение');}}catch(e){}}
 setInterval(()=>{if(!ME||document.hidden)return;refreshMe();if(S.sub==='ticket'||S.sub==='aticket'){const ta=$('#r-text');if(!ta||!ta.value)render(true).then(()=>{if($('#chat'))scrollChat();});}},15000);
+
+/* ---------- Android app back button ---------- */
+window.kadrBack=()=>{
+  if(document.querySelector('.ov')){closeOv();return true;}
+  if(S.sub==='ticket'){S.sub='support';render();return true;}
+  if(S.sub==='aticket'){S.sub='admin';render();return true;}
+  if(S.sub){S.sub=null;S.tab='me';render();return true;}
+  if(S.user){S.user=null;render();return true;}
+  if(ME&&S.tab!=='feed'){S.tab='feed';S.draft=null;render();return true;}
+  return false;
+};
 
 /* ---------- boot ---------- */
 try{const t=localStorage.getItem('kadr-theme');if(t)document.documentElement.dataset.theme=t;}catch(e){}

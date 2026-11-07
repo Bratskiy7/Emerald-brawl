@@ -1,0 +1,44 @@
+plugins {
+    id 'com.android.application'
+}
+
+def buildNo = (System.getenv('VERSION_CODE') ?: '1') as int
+
+android {
+    namespace 'ru.kadr.app'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId 'ru.kadr.app'
+        minSdk 26
+        targetSdk 34
+        versionCode buildNo
+        versionName "1.${buildNo}"
+    }
+
+    signingConfigs {
+        release {
+            storeFile file('../kadr-release.jks')
+            storePassword System.getenv('KS_PASS') ?: 'kadr-release-key'
+            keyAlias 'kadr'
+            keyPassword System.getenv('KS_PASS') ?: 'kadr-release-key'
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            signingConfig signingConfigs.release
+        }
+    }
+
+    lint {
+        checkReleaseBuilds false
+        abortOnError false
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
