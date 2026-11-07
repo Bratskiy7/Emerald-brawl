@@ -497,7 +497,7 @@ function tabsHTML(){
   $('#tabsbar').hidden=false;
   const cur=k=>S.tab===k&&!S.user&&!S.sub;
   const t=(k,ic,l)=>`<button class="tab${k==='new'?' new':''}" data-act="tab" data-tab="${k}" aria-label="${l}" ${cur(k)?'aria-current="page"':''}>${k==='new'?`<span>${ic}</span>`:ic}</button>`;
-  const badge=(ME.supportUnread||0)+(ME.adminOpen||0)+(ME.adminReports||0);
+  const badge=(ME.supportUnread||0)+(ME.adminOpen||0)+(ME.adminReports||0)+(ME.adminMail||0);
   $('#tabs').innerHTML=t('feed',I.home,'Лента')+t('explore',I.search,'Поиск')+t('new',I.plus,'Новая публикация')+t('reels',I.reels,'Рилсы')+
    `<button class="tab" data-act="tab" data-tab="me" aria-label="Профиль" ${(S.tab==='me'&&!S.user)||S.sub?'aria-current="page"':''}><img class="meav" src="${avOf(ME)}" alt="">${badge?`<span class="dot">${badge>99?'99+':badge}</span>`:''}</button>`;
 }
@@ -540,7 +540,7 @@ async function render(keepScroll){
   if(!ME)return showAuth();
   const seq=++renderSeq;const y=window.scrollY;stopReels();tabsHTML();
   const app=$('#app');
-  const view=S.sub==='activity'?activityView:S.sub==='support'?supportView:S.sub==='ticket'?ticketView:S.sub==='admin'?adminView:S.sub==='aticket'?adminTicketView:S.sub==='settings'?settingsView:
+  const view=S.sub==='amail'?adminMailView:S.sub==='activity'?activityView:S.sub==='support'?supportView:S.sub==='ticket'?ticketView:S.sub==='admin'?adminView:S.sub==='aticket'?adminTicketView:S.sub==='settings'?settingsView:
     S.user?()=>profileView(S.user):S.tab==='feed'?feedView:S.tab==='explore'?exploreView:S.tab==='new'?createView:S.tab==='reels'?reelsView:()=>profileView(ME.handle);
   const sync=view.sync;
   if(!sync&&!keepScroll)app.innerHTML=loading();
@@ -589,7 +589,7 @@ async function profileView(h){
       <div><div class="pname">${esc(u.name)}${u.official?'<span class="offl">официальный канал</span>':''}</div>${badgesHTML(u.badges)}${u.bio?`<p class="pbio">${rich(u.bio)}</p>`:''}</div>`;
   if(me){
     body+=`<div class="btns"><button class="btn" data-act="sub" data-sub="settings">Редактировать</button><button class="btn" data-act="sub" data-sub="support">Поддержка${ME.supportUnread?`<span class="n">${ME.supportUnread}</span>`:''}</button></div>`;
-    if(ME.role==='admin'){const n=(ME.adminOpen||0)+(ME.adminReports||0);body+=`<div class="btns"><button class="btn pri" data-act="sub" data-sub="admin">Админ-панель${n?`<span class="n">${n}</span>`:''}</button></div>`;}
+    if(ME.role==='admin'){const n=(ME.adminOpen||0)+(ME.adminReports||0)+(ME.adminMail||0);body+=`<div class="btns"><button class="btn pri" data-act="sub" data-sub="admin">Админ-панель${n?`<span class="n">${n}</span>`:''}</button></div>`;}
     if(!ME.email||(!ME.emailVerified&&ME.mailAvailable))body+=`<div class="card"><h3>${ME.email?'Подтвердите почту':'Добавьте почту'}</h3><p>${ME.email?'Без подтверждения не получится восстановить пароль по почте.':'Почта нужна, чтобы восстановить пароль, если вы его забудете.'}</p><button class="btn pri" data-act="sub" data-sub="settings">${ME.email?'Подтвердить':'Добавить почту'}</button></div>`;
     if(!u.official)body+=inviteCard();
     if(!u.verified)body+=`<div class="card"><h3>${VB} Синяя галочка</h3><p>Галочка показывает, что аккаунт настоящий. Заявку рассматривает команда Кадра, ответ придёт в поддержку.</p><button class="btn pri" data-act="askverify">Подать заявку</button></div>`;
@@ -657,12 +657,34 @@ async function ticketView(){
 }
 /* admin */
 async function adminView(){
-  const tabs=[['tickets','Обращения'],['reports','Жалобы'],['users','Люди'],['stats','Цифры']];
+  const tabs=[['tickets','Обращения',ME.adminOpen],['reports','Жалобы',ME.adminReports],['mail','Почта',ME.adminMail],['users','Люди'],['stats','Цифры']];
   let body='';
   if(S.adminTab==='tickets'){
     const d=await api('admin/tickets?status='+S.tstatus);
     body=`<div class="chips" style="padding-top:12px">${[['open','Ждут ответа'],['answered','Отвечены'],['closed','Закрыты'],['all','Все']].map(([k,l])=>`<button class="chip" data-act="tstatus" data-s="${k}" aria-pressed="${S.tstatus===k}">${l}${k==='open'&&ME.adminOpen?`<span class="n">${ME.adminOpen}</span>`:''}</button>`).join('')}</div>
       ${d.tickets.length?`<div class="tlist">${d.tickets.map(t=>ticketRow(t,true)).join('')}</div>`:`<div class="empty"><strong>Пусто</strong>${S.tstatus==='open'?'Все обращения разобраны':'Здесь пока ничего нет'}</div>`}`;
+  }else if(S.adminTab==='mail'){
+    const box=S.mailBox||'in';
+    const sub=`<div class="chips"><button class="chip" data-act="compose" style="background:var(--accent);color:#fff;border-color:var(--accent)">✎ Написать</button>${[['in','Входящие'],['out','Отправленные'],['setup','Настройка']].map(([k,l])=>`<button class="chip" data-act="mailbox" data-b="${k}" aria-pressed="${box===k}">${l}</button>`).join('')}</div>`;
+    if(box==='setup'){
+      const d=await api('admin/mail-setup');
+      body=sub+(!d.domain?`<div class="empty"><strong>Нужен свой домен</strong>Почта работает на своём домене. Подключите домен к Кадру, затем вернитесь сюда.</div>`:`
+      <div class="card"><h3>Почта @${esc(d.domain)}</h3>
+        <p>Приём писем: ${d.inbound.running?'<b style="color:var(--ok)">работает ✓</b>':`<b style="color:var(--heart)">не запущен</b>${d.inbound.error?' — '+esc(d.inbound.error):''}`}</p>
+        <p>Отправка: ${d.mode==='relay'?'через внешний SMTP-сервис ✓':d.outbound?'<b style="color:var(--ok)">напрямую, исходящий порт 25 открыт ✓</b>':'<b style="color:var(--heart)">исходящий порт 25 закрыт хостингом</b>. Попросите HOSTKEY открыть порт 25 или подключите сервис рассылок скриптом set-mail.sh'}</p>
+        <p>Любое письмо на <b>что-угодно@${esc(d.domain)}</b> попадёт во «Входящие». Письма с кодами уходят с noreply@${esc(d.domain)}.</p></div>
+      <h2 class="sec-h" style="margin:18px 0 6px">DNS-записи у регистратора</h2>
+      <p style="margin:0 0 10px;color:var(--muted);font-size:13px">Добавьте их в кабинете, где покупали домен. ✓ появится, когда запись заработает (обычно 15–60 минут).</p>
+      ${d.records.map((r,i)=>`<div class="card" style="margin-bottom:10px"><h3>${r.ok?'<span style="color:var(--ok)">✓</span>':'<span style="color:var(--heart)">✗</span>'} ${esc(r.what)}</h3>
+        <p>Тип: <b>${r.type}</b> · Имя: <b>${esc(r.name)}</b>${r.priority?` · Приоритет: <b>${r.priority}</b>`:''}</p>
+        <div class="secret" style="font-size:12px" id="dnsv${i}">${esc(r.value)}</div><button class="btn sm" data-act="copydns" data-i="${i}">Скопировать значение</button></div>`).join('')}
+      <p style="color:var(--muted);font-size:13px">Ещё одно: в панели HOSTKEY найдите «Обратная зона» / PTR / rDNS для IP ${esc(d.ip||'сервера')} и впишите <b>${esc(d.domain)}</b>. Это сильно помогает, чтобы письма не попадали в «Спам».</p>`);
+    }else{
+      const d=await api('admin/mail?box='+box);
+      body=sub+(d.mode==='off'?`<div class="card"><h3>Почта не подключена</h3><p>Нужен свой домен.</p></div>`:'')+
+        (d.items.length?`<div class="tlist">${d.items.map(m=>`<button class="trow${m.read?'':' unread'}" data-act="amail" data-id="${m.id}"><span class="m"><b>${esc(box==='in'?m.from:'Кому: '+m.to)}</b><small><b style="font-weight:700;color:var(--fg)">${esc(m.subject)}</b> — ${esc(m.snippet)}</small>${m.error?`<small style="color:var(--heart)">Не доставлено: ${esc(m.error)}</small>`:''}</span><span style="display:flex;flex-direction:column;align-items:flex-end;gap:4px"><time>${ago(m.ts)}</time>${m.attachments?'<span class="pill">📎</span>':''}</span></button>`).join('')}</div>`
+          :`<div class="empty"><strong>${box==='in'?'Писем пока нет':'Вы ещё ничего не отправляли'}</strong>${box==='in'&&d.domain?`Напишите на support@${esc(d.domain)}, чтобы проверить`:''}</div>`);
+    }
   }else if(S.adminTab==='reports'){
     const d=await api('admin/reports');keep(d.items.map(i=>i.post));
     body=d.items.length?`<div>${d.items.map(i=>{const p=i.post;return `<div class="rep" data-pid="${p.id}"><div class="top2">
@@ -685,7 +707,7 @@ async function adminView(){
     body=`<div class="tiles" style="padding-block:14px">${T(s.reportsOpen,'публикаций с жалобами')}${T(s.telegramLinked,'подключили Telegram')}${T(s.invited,'пришли по приглашению')}${T(s.users,'пользователей')}${T(s.newUsers,'новых за сутки')}${T(s.verified,'с галочкой')}${T(s.posts,'постов')}${T(s.reels,'рилсов')}${T(s.newPosts,'публикаций за сутки')}${T(s.ticketsOpen,'обращений ждут ответа')}${T(s.ticketsAll,'обращений всего')}${T(s.banned,'заблокировано')}</div>`;
   }
   return topBar(`${backBtn('closesub')}<h1>Админ-панель</h1><span style="width:40px"></span>`)+
-   `<div class="gut"><div class="seg" style="grid-template-columns:repeat(4,1fr);margin-top:12px;font-size:13px">${tabs.map(([k,l])=>`<button data-act="atab" data-t="${k}" aria-pressed="${S.adminTab===k}">${l}</button>`).join('')}</div>${body}</div>`;
+   `<div class="gut"><div class="chips" style="padding-top:12px">${tabs.map(([k,l,n])=>`<button class="chip" data-act="atab" data-t="${k}" aria-pressed="${S.adminTab===k}">${l}${n?`<span class="n">${n}</span>`:''}</button>`).join('')}</div>${body}</div>`;
 }
 async function adminTicketView(){
   const d=await api('admin/tickets/'+S.ticket);const t=d.ticket;refreshMe();
@@ -842,6 +864,31 @@ function reportSheet(id){
 }
 async function copyText(t,okMsg){try{await navigator.clipboard.writeText(t);toast(okMsg||'Скопировано');}catch(x){toast('Не удалось скопировать: выделите текст вручную');}}
 
+/* ---------- admin mailbox ---------- */
+async function adminMailView(){
+  const d=await api('admin/mail/'+S.mailId);const m=d.mail;refreshMe();
+  return topBar(`${backBtn('tomail')}<h1 style="flex:1;margin-left:4px">${esc(m.subject)}</h1><button class="ibtn" data-act="delmail" aria-label="Удалить">${I.trash}</button>`)+
+   `<div class="gut" style="padding-block:14px 30px;display:flex;flex-direction:column;gap:12px">
+    <div style="font-size:14px"><div><b>От:</b> ${esc(m.from)}</div><div><b>Кому:</b> ${esc(m.to)}</div><div style="color:var(--muted)">${new Date(m.ts).toLocaleString('ru-RU',{dateStyle:'medium',timeStyle:'short'})}</div>
+      ${m.error?`<div style="color:var(--heart)">Не доставлено: ${esc(m.error)}</div>`:''}</div>
+    <div class="card" style="background:var(--surface);white-space:pre-wrap;overflow-wrap:anywhere;font-size:15px">${esc(m.text)||'<i>(пустое письмо)</i>'}</div>
+    ${m.attachmentNames.length?`<p style="margin:0;color:var(--muted);font-size:13px">📎 Вложения (не сохраняются): ${m.attachmentNames.map(esc).join(', ')}</p>`:''}
+    ${m.dir==='in'?`<form class="card form" id="mreply"><h3>Ответить</h3>
+      <label>От кого<select id="mr-from" style="border:1px solid var(--line);background:var(--surface);border-radius:12px;padding:10px;font-size:15px;color:var(--fg)">${['support','hello','noreply'].map(x=>`<option ${x==='support'?'selected':''}>${x}</option>`).join('')}</select></label>
+      <textarea id="mr-text" rows="6" maxlength="50000" required placeholder="Текст ответа"></textarea><p class="err" id="mr-err" hidden></p><button class="btn pri" style="min-height:44px">Отправить</button></form>`:''}</div>`;
+}
+function composeSheet(){
+  const o=sheet('Новое письмо',`<form class="form" id="mcomp">
+    <label>От кого<div style="display:flex;align-items:center;gap:6px"><input id="mc-from" value="support" maxlength="40" style="flex:1"><span style="color:var(--muted);text-transform:none;letter-spacing:0">@домен</span></div></label>
+    <label>Кому<input id="mc-to" type="email" required placeholder="name@example.ru"></label>
+    <label>Тема<input id="mc-subj" maxlength="200"></label>
+    <textarea id="mc-text" rows="7" maxlength="50000" required placeholder="Текст письма"></textarea>
+    <p class="err" id="mc-err" hidden></p><button class="btn pri" style="min-height:44px">Отправить</button></form>`);
+  o.querySelector('#mcomp').addEventListener('submit',async e=>{e.preventDefault();const bt=o.querySelector('.btn');bt.disabled=true;
+    try{await api('admin/mail/send',{body:{from:o.querySelector('#mc-from').value,to:o.querySelector('#mc-to').value,subject:o.querySelector('#mc-subj').value,text:o.querySelector('#mc-text').value}});closeOv();toast('Письмо отправлено');S.mailBox='out';if(S.sub==='admin')render(true);}
+    catch(x){const er=o.querySelector('#mc-err');er.textContent=x.message;er.hidden=false;bt.disabled=false;}});
+}
+
 /* ---------- activity ---------- */
 async function activityView(){
   const d=await api('activity');ME.activityUnread=0;
@@ -959,6 +1006,11 @@ function bindView(){
   const emf=$('#emf');if(emf)emf.addEventListener('submit',async e=>{e.preventDefault();const er=$('#em-err');er.hidden=true;const bt=emf.querySelector('button:not([type])');bt.disabled=true;
     try{const d=await api('me/email',{body:{email:$('#em-v').value.trim()}});ME=d.me;await render(true);verifySheet();}
     catch(x){try{ME=(await api('me')).me;}catch(y){}er.textContent=x.message;er.hidden=false;bt.disabled=false;}});
+  const mr=$('#mreply');if(mr)mr.addEventListener('submit',async e=>{e.preventDefault();const bt=mr.querySelector('.btn');bt.disabled=true;
+    try{const m=await api('admin/mail/'+S.mailId);const subj=/^re:/i.test(m.mail.subject)?m.mail.subject:'Re: '+m.mail.subject;
+      const to=(m.mail.replyTo||m.mail.from).match(/<([^>]+)>/)?.[1]||(m.mail.replyTo||m.mail.from);
+      await api('admin/mail/send',{body:{from:$('#mr-from').value,to,subject:subj,text:$('#mr-text').value,replyId:S.mailId}});toast('Ответ отправлен');$('#mr-text').value='';}
+    catch(x){const er=$('#mr-err');er.textContent=x.message;er.hidden=false;}bt.disabled=false;});
   const pwf=$('#pwf');if(pwf)pwf.addEventListener('submit',async e=>{e.preventDefault();const err=$('#p-err');err.hidden=true;
     try{await api('me/password',{body:{old:$('#p-old').value,password:$('#p-new').value}});pwf.reset();toast('Пароль изменён. Другие устройства вышли из аккаунта');}
     catch(x){err.textContent=x.message;err.hidden=false;}});
@@ -1027,6 +1079,12 @@ document.addEventListener('click',async e=>{
     case 'actcomments':openComments(a.dataset.id);break;
     case 'resetagain':S.resetHandle=null;showReset();break;
     case 'verifyemail':verifySheet();break;
+    case 'mailbox':S.mailBox=a.dataset.b;render(true);break;
+    case 'compose':composeSheet();break;
+    case 'amail':S.sub='amail';S.mailId=a.dataset.id;render();break;
+    case 'tomail':S.sub='admin';S.adminTab='mail';render();break;
+    case 'delmail':if(!a.dataset.sure){a.dataset.sure='1';toast('Нажмите ещё раз, чтобы удалить письмо');break;}await api('admin/mail/'+S.mailId,{method:'DELETE'});toast('Письмо удалено');S.sub='admin';S.adminTab='mail';render();break;
+    case 'copydns':copyText($('#dnsv'+a.dataset.i).textContent,'Значение скопировано');break;
     case 'report':reportSheet(a.dataset.id);break;
     case 'copylink':closeOv();copyText(location.origin+location.pathname+'?p='+a.dataset.id,'Ссылка на публикацию скопирована');break;
     case 'repact':{const row=a.closest('[data-pid]');const act2=a.dataset.a;
@@ -1079,7 +1137,7 @@ $('#avfile').addEventListener('change',async e=>{const f=e.target.files[0];e.tar
   catch(x){toast(x.message||'Не получилось загрузить фото');}});
 
 /* ---------- live badges ---------- */
-async function refreshMe(){try{const d=await api('me');const k=m=>(m.supportUnread||0)+'/'+(m.adminOpen||0)+'/'+(m.adminReports||0)+'/'+(m.activityUnread||0);const before=k(ME);ME=d.me;if(before!==k(ME)){tabsHTML();if(ME.supportUnread&&!S.sub)toast('Поддержка ответила на ваше обращение');}}catch(e){}}
+async function refreshMe(){try{const d=await api('me');const k=m=>(m.supportUnread||0)+'/'+(m.adminOpen||0)+'/'+(m.adminReports||0)+'/'+(m.activityUnread||0)+'/'+(m.adminMail||0);const before=k(ME);ME=d.me;if(before!==k(ME)){tabsHTML();if(ME.supportUnread&&!S.sub)toast('Поддержка ответила на ваше обращение');}}catch(e){}}
 setInterval(()=>{if(!ME||document.hidden)return;refreshMe();if(S.sub==='ticket'||S.sub==='aticket'){const ta=$('#r-text');if(!ta||!ta.value)render(true).then(()=>{if($('#chat'))scrollChat();});}},15000);
 
 /* ---------- Android app back button ---------- */
@@ -1099,7 +1157,7 @@ try{const t=localStorage.getItem('kadr-theme');if(t)document.documentElement.dat
 function applyDeepLink(){
   const q=DEEP;DEEP=null;if(!q)return false;
   if(q.get('support')){S.sub=q.get('support').startsWith('t')?'ticket':'support';S.ticket=q.get('support');return true;}
-  if(q.get('admin')&&ME.role==='admin'){S.sub='admin';S.adminTab=q.get('admin')==='reports'?'reports':'tickets';S.tstatus='open';return true;}
+  if(q.get('admin')&&ME.role==='admin'){S.sub='admin';S.adminTab=['reports','mail'].includes(q.get('admin'))?q.get('admin'):'tickets';S.mailBox='in';S.tstatus='open';return true;}
   if(q.get('u')){const h=q.get('u');if(h===ME.handle){S.tab='me';}else S.user=h;return true;}
   if(q.get('p')){const id=q.get('p'),c=q.get('c');setTimeout(()=>c?openComments(id):openPost(id),300);return false;}
   return false;

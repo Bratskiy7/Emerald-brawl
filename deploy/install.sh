@@ -30,7 +30,7 @@ if [ -f "$APP/data/data.json" ]; then
   cp "$APP/data/data.json" "$APP/backups/data-$(date +%Y%m%d-%H%M%S).json"
   ls -1t "$APP/backups"/data-*.json | tail -n +31 | xargs -r rm --
 fi
-cp "$SRC/server.js" "$APP/server.js"
+cp "$SRC"/*.js "$APP/"
 rm -rf "$APP/public" && cp -r "$SRC/public" "$APP/public"
 
 cat > /etc/systemd/system/kadr.service <<EOF
@@ -51,6 +51,13 @@ RestartSec=2
 [Install]
 WantedBy=multi-user.target
 EOF
+# входящая почта для своего домена: порт 25
+if [ "$DOMAIN" != "kadr.193-247-73-123.sslip.io" ]; then
+  if ss -ltn 2>/dev/null | grep -q ':25 ' && ! ss -ltnp 2>/dev/null | grep ':25 ' | grep -q node; then
+    echo "!! Порт 25 уже занят другой почтовой программой — приём писем Кадра не будет запущен."
+  fi
+  if command -v ufw >/dev/null && ufw status | grep -q "Status: active"; then ufw allow 25/tcp >/dev/null && echo "Файрвол: порт 25 открыт для входящей почты"; fi
+fi
 systemctl daemon-reload
 systemctl enable kadr >/dev/null 2>&1
 systemctl restart kadr

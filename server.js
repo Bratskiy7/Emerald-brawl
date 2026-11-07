@@ -130,42 +130,64 @@ async function handleTgUpdate(upd) {
   }
 })();
 
-/* ---------------- e-mail (SMTP over TLS, port 465) ---------------- */
+/* ---------------- e-mail: own domain mailbox (mail.js) ---------------- */
+const M = require('./mail');
 const MAIL_FILE = path.join(DIR, 'mail.json');
 let MAIL = {};
 function loadMail() { try { MAIL = JSON.parse(fs.readFileSync(MAIL_FILE, 'utf8')); } catch { MAIL = {}; } }
 loadMail();
 fs.watchFile(MAIL_FILE, { interval: 5000 }, loadMail);
-const mailReady = () => !!(MAIL.host && MAIL.user && MAIL.pass);
+db.mailbox = db.mailbox || {};
+const relayReady = () => !!(MAIL.host && MAIL.user && MAIL.pass);
+function mailDomain() {
+  let d = process.env.KADR_MAIL_DOMAIN || '';
+  if (!d && BASE) { try { d = new URL(BASE).hostname; } catch {} }
+  return d && !/sslip\.io$|^localhost$|^[\d.]+$/.test(d) ? d : '';
+}
+const mailReady = () => relayReady() || (!!mailDomain() && process.env.KADR_DIRECT_MAIL !== '0');
+let DKIM = null; const dkim = () => DKIM ??= M.loadDkim(DIR);
 const EMAIL_RE = /^[^\s@<>()"',;:]+@[^\s@<>()"',;:]+\.[a-zа-яё]{2,}$/i;
 const normEmail = e => String(e || '').trim().toLowerCase();
 const byEmail = e => { e = normEmail(e); return e ? Object.values(db.users).find(u => u.email === e) : null; };
-const b64 = s => Buffer.from(s, 'utf8').toString('base64');
-function smtpSend(to, subject, text) {
-  return new Promise((resolve, reject) => {
-    if (!mailReady()) return reject(new Error('Почта не настроена'));
-    const from = MAIL.from || MAIL.user;
-    const sock = tls.connect({ host: MAIL.host, port: +MAIL.port || 465, servername: MAIL.host, timeout: 20000 });
-    let buf = '', waiter = null, done = false;
-    const finish = err => { if (done) return; done = true; try { sock.end(); } catch {} err ? reject(err) : resolve(); };
-    sock.setEncoding('utf8');
-    sock.on('data', d => { buf += d; if (/(^|\n)\d{3} [^\n]*\n$/.test(buf.replace(/\r/g, '')) && waiter) { const w = waiter; waiter = null; const r = buf; buf = ''; w(r); } });
-    sock.on('error', e => finish(e)); sock.on('timeout', () => finish(new Error('SMTP timeout')));
-    const expect = (code) => new Promise((res2, rej2) => { waiter = r => { const last = r.replace(/\r/g, '').trim().split('\n').pop(); last.startsWith(String(code)) ? res2(r) : rej2(new Error('SMTP: ' + last.slice(0, 200))); }; });
-    const cmd = (line, code) => { const p = expect(code); sock.write(line + '\r\n'); return p; };
-    const body = b64(text).replace(/.{76}/g, '$&\r\n');
-    const msg = [`From: =?UTF-8?B?${b64('Кадр')}?= <${from}>`, `To: <${to}>`, `Subject: =?UTF-8?B?${b64(subject)}?=`,
-      `Date: ${new Date().toUTCString()}`, `Message-ID: <${crypto.randomBytes(12).toString('hex')}@${from.split('@')[1]}>`,
-      'MIME-Version: 1.0', 'Content-Type: text/plain; charset=utf-8', 'Content-Transfer-Encoding: base64', '', body, '.'].join('\r\n');
-    (async () => {
-      await expect(220);
-      await cmd('EHLO kadr', 250);
-      await cmd('AUTH LOGIN', 334); await cmd(b64(MAIL.user), 334); await cmd(b64(MAIL.pass), 235);
-      await cmd(`MAIL FROM:<${from}>`, 250); await cmd(`RCPT TO:<${to}>`, 250);
-      await cmd('DATA', 354); await cmd(msg, 250);
-      sock.write('QUIT\r\n'); finish();
-    })().catch(finish);
-  });
+function keepMail(item) {
+  const m = { id: newId('m'), ts: Date.now(), read: item.dir === 'out', ...item };
+  db.mailbox[m.id] = m;
+  const all = Object.values(db.mailbox); if (all.length > 3000) for (const x of all.sort((a, b) => a.ts - b.ts).slice(0, all.length - 3000)) delete db.mailbox[x.id];
+  save(); return m;
+}
+async function sendMail({ to, subject, text, from = 'noreply', fromName = 'Кадр', replyTo, inReplyTo, keep = false }) {
+  const dom = mailDomain();
+  let fromAddr = from.includes('@') ? from : dom ? `${from}@${dom}` : '';
+  if (relayReady() && !(MAIL.from && dom && MAIL.from.endsWith('@' + dom))) fromAddr = MAIL.from || MAIL.user;
+  if (!fromAddr) throw new Error('Почта не настроена');
+  const msg = M.buildMessage({ from: fromAddr, fromName, to, subject, text, replyTo, inReplyTo, domain: dom || fromAddr.split('@')[1] });
+  const sig = dom && fromAddr.endsWith('@' + dom) ? M.dkimSign(msg, { domain: dom, selector: 'mail', privateKey: dkim().privateKey }) : null;
+  const data = M.serialize(msg, sig);
+  let error = null;
+  try {
+    if (relayReady()) await M.sendViaRelay(MAIL, fromAddr, to, data);
+    else if (dom) await M.sendDirect(dom, fromAddr, to, data, process.env.KADR_MX_OVERRIDE);
+    else throw new Error('Почта не настроена');
+  } catch (e) { error = e.message; }
+  if (keep) keepMail({ dir: 'out', from: fromAddr, to, subject, text, messageId: msg.id, inReplyTo: inReplyTo || '', error });
+  if (error) throw new Error(error);
+  return msg.id;
+}
+const smtpSend = (to, subject, text) => sendMail({ to, subject, text });
+let INBOUND = { running: false, error: null };
+if (mailDomain() && process.env.KADR_SMTP_PORT !== '0') {
+  const dom = mailDomain();
+  const srv = M.startInbound({ port: +process.env.KADR_SMTP_PORT || 25, host: '0.0.0.0', domain: dom,
+    certFiles: { cert: `/etc/letsencrypt/live/${dom}/fullchain.pem`, key: `/etc/letsencrypt/live/${dom}/privkey.pem` },
+    log: m => { console.log(m); if (typeof m === 'string' && m.includes('не запущен')) INBOUND.error = m; },
+    onMessage: ({ from, rcpts, raw }) => {
+      const p = M.parseMessage(raw);
+      const m = keepMail({ dir: 'in', from: p.from || from, envFrom: from, to: rcpts.join(', '), subject: p.subject, text: p.text, attachments: p.attachments,
+        messageId: p.messageId, inReplyTo: p.inReplyTo, replyTo: p.replyTo, date: p.date });
+      notifyAdmins(`📧 Письмо на ${htmlEsc(rcpts.join(', '))}\nОт: ${htmlEsc(p.from || from)}\nТема: ${htmlEsc(p.subject)}`, '?admin=mail');
+      return m;
+    } });
+  srv.on('listening', () => { INBOUND.running = true; });
 }
 function newCode() { const code = String(crypto.randomInt(100000, 1000000)); const salt = crypto.randomBytes(8).toString('hex'); return { code, salt, hash: crypto.scryptSync(code, salt, 32).toString('hex') }; }
 const codeOk = (rec, code) => crypto.timingSafeEqual(crypto.scryptSync(String(code || '').trim(), rec.salt, 32), Buffer.from(rec.hash, 'hex'));
@@ -240,6 +262,7 @@ function meView(u) {
     invite: { ...inviteStats(u), path: '?ref=' + u.handle } };
   if (u.role === 'admin') {
     out.adminOpen = Object.values(db.tickets).filter(t => t.status === 'open').length;
+    out.adminMail = Object.values(db.mailbox).filter(m => m.dir === 'in' && !m.read).length;
     out.adminReports = new Set(Object.values(db.reports).filter(r => r.status === 'open' && db.posts[r.postId]).map(r => r.postId)).size;
   }
   return out;
@@ -738,6 +761,51 @@ route('POST', '/api/admin/tickets/:id/verify', 'admin', async (req, res, me, id)
   t.status = 'closed'; t.unreadUser = true; t.unreadStaff = false; t.updatedAt = Date.now();
   save(); send(res, 200, { ticket: ticketView(t, true) });
   notify(u.id, grant ? '✅ Поздравляем! Вам выдана синяя галочка.' : 'Заявку на галочку пока отклонили. Подробности в поддержке.', '?support=' + t.id, 'Открыть');
+});
+/* admin: domain mailbox */
+const net = require('net');
+const dnsP = require('dns').promises;
+const mailRow = m => ({ id: m.id, dir: m.dir, from: m.from, to: m.to, subject: m.subject, snippet: (m.text || '').replace(/\s+/g, ' ').slice(0, 120), ts: m.ts, read: m.read, attachments: (m.attachments || []).length, error: m.error || null });
+route('GET', '/api/admin/mail', 'admin', async (req, res) => {
+  const box = new URL(req.url, 'http://x').searchParams.get('box') === 'out' ? 'out' : 'in';
+  const list = Object.values(db.mailbox).filter(m => m.dir === box).sort((a, b) => b.ts - a.ts).slice(0, 300);
+  send(res, 200, { items: list.map(mailRow), domain: mailDomain(), mode: relayReady() ? 'relay' : mailDomain() ? 'direct' : 'off' });
+});
+route('GET', '/api/admin/mail/:id', 'admin', async (req, res, me, id) => {
+  const m = db.mailbox[id]; need(m, 404, 'Письмо не найдено');
+  if (!m.read) { m.read = true; save(); }
+  send(res, 200, { mail: { ...mailRow(m), text: m.text || '', attachmentNames: m.attachments || [], replyTo: m.replyTo || '', messageId: m.messageId || '' } });
+});
+route('DELETE', '/api/admin/mail/:id', 'admin', async (req, res, me, id) => { delete db.mailbox[id]; save(); send(res, 200, { ok: true }); });
+route('POST', '/api/admin/mail/send', 'admin', async (req, res, me) => {
+  need(mailReady(), 503, 'Почта не настроена: нужен свой домен');
+  const b = await readJson(req);
+  const to = M.addrOf(b.to); need(EMAIL_RE.test(to), 400, 'Неверный адрес получателя');
+  const local = String(b.from || 'support').toLowerCase().replace(/@.*/, '');
+  need(/^[a-z0-9._-]{1,40}$/.test(local), 400, 'Неверный адрес отправителя');
+  const subject = clean(b.subject, 200) || '(без темы)', text = String(b.text || '').slice(0, 50000);
+  need(text.trim(), 400, 'Письмо пустое');
+  const orig = b.replyId ? db.mailbox[b.replyId] : null;
+  try { await sendMail({ to, subject, text, from: local, fromName: local === 'noreply' ? 'Кадр' : 'Кадр — поддержка', inReplyTo: orig ? orig.messageId : '', keep: true }); }
+  catch (e) { throw Object.assign(new Error('Письмо не отправлено: ' + e.message), { status: 502 }); }
+  send(res, 200, { ok: true });
+});
+const txt = async name => { try { return (await dnsP.resolveTxt(name)).map(r => r.join('')); } catch { return []; } };
+route('GET', '/api/admin/mail-setup', 'admin', async (req, res) => {
+  const dom = mailDomain();
+  if (!dom) return send(res, 200, { domain: '', records: [] });
+  const dk = dkim().dnsValue;
+  const [a4, mx, spf, dkimTxt, dmarc] = await Promise.all([
+    dnsP.resolve4(dom).catch(() => []), dnsP.resolveMx(dom).catch(() => []), txt(dom), txt('mail._domainkey.' + dom), txt('_dmarc.' + dom)]);
+  const outbound = relayReady() ? null : await new Promise(r => { const sck = net.connect({ host: 'gmail-smtp-in.l.google.com', port: 25, timeout: 6000 });
+    sck.once('connect', () => { sck.destroy(); r(true); }); sck.once('timeout', () => { sck.destroy(); r(false); }); sck.once('error', () => r(false)); });
+  send(res, 200, { domain: dom, mode: relayReady() ? 'relay' : 'direct', inbound: INBOUND, outbound, ip: a4[0] || null, records: [
+    { what: 'Сайт и почтовый сервер', type: 'A', name: '@', value: a4[0] || 'IP вашего сервера', ok: a4.length > 0 },
+    { what: 'Куда доставлять почту', type: 'MX', name: '@', value: dom, priority: 10, ok: mx.some(m => m.exchange.toLowerCase().replace(/\.$/, '') === dom) },
+    { what: 'Кто может отправлять от имени домена (SPF)', type: 'TXT', name: '@', value: 'v=spf1 a mx ~all', ok: spf.some(t => t.startsWith('v=spf1')) },
+    { what: 'Подпись писем (DKIM)', type: 'TXT', name: 'mail._domainkey', value: dk, ok: dkimTxt.some(t => t.replace(/\s/g, '') === dk.replace(/\s/g, '')) },
+    { what: 'Политика проверки (DMARC)', type: 'TXT', name: '_dmarc', value: `v=DMARC1; p=none; rua=mailto:dmarc@${dom}`, ok: dmarc.some(t => t.startsWith('v=DMARC1')) },
+  ] });
 });
 route('GET', '/api/admin/reports', 'admin', async (req, res, me) => {
   const groups = {};
