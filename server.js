@@ -804,7 +804,7 @@ route('GET', '/api/admin/mail-setup', 'admin', async (req, res) => {
     { what: 'Куда доставлять почту', type: 'MX', name: '@', value: dom, priority: 10, ok: mx.some(m => m.exchange.toLowerCase().replace(/\.$/, '') === dom) },
     { what: 'Кто может отправлять от имени домена (SPF)', type: 'TXT', name: '@', value: 'v=spf1 a mx ~all', ok: spf.some(t => t.startsWith('v=spf1')) },
     { what: 'Подпись писем (DKIM)', type: 'TXT', name: 'mail._domainkey', value: dk, ok: dkimTxt.some(t => t.replace(/\s/g, '') === dk.replace(/\s/g, '')) },
-    { what: 'Политика проверки (DMARC)', type: 'TXT', name: '_dmarc', value: `v=DMARC1; p=none; rua=mailto:dmarc@${dom}`, ok: dmarc.some(t => t.startsWith('v=DMARC1')) },
+    { what: 'Политика проверки (DMARC)', type: 'TXT', name: '_dmarc', value: 'v=DMARC1; p=none', ok: dmarc.some(t => t.startsWith('v=DMARC1')) },
   ] });
 });
 route('GET', '/api/admin/reports', 'admin', async (req, res, me) => {
