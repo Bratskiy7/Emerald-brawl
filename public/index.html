@@ -375,6 +375,13 @@ const IS_IOS=/iPhone|iPad|iPod/.test(navigator.userAgent)||(navigator.platform==
 const IS_STANDALONE=matchMedia('(display-mode: standalone)').matches||navigator.standalone===true||/KadrApp/.test(navigator.userAgent);
 const IOS_HOWTO='Откройте сайт в Safari, нажмите «Поделиться» (квадрат со стрелкой вверх) и выберите «На экран «Домой»». Кадр появится на главном экране как приложение.';
 let iosHintHidden=false;try{iosHintHidden=localStorage.getItem('kadr-ios-hint')==='1';}catch(e){}
+const NOPOSTER='data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
+/* muted videos in feed, grids and sheets play only while on screen */
+const vidIO=('IntersectionObserver' in window)?new IntersectionObserver(es=>{for(const e of es){const v=e.target;
+  if(e.isIntersecting&&e.intersectionRatio>=.5){v.muted=true;v.play().catch(()=>{});}else v.pause();}},{threshold:[0,.5]}):null;
+function watchVideos(root){(root||document).querySelectorAll('video.av-play:not([data-w])').forEach(v=>{v.dataset.w='1';v.muted=true;v.defaultMuted=true;
+  if(vidIO)vidIO.observe(v);else{v.play().catch(()=>{});}});}
+new MutationObserver(()=>watchVideos()).observe(document.body,{childList:true,subtree:true});
 const isVideo=m=>/\.(mp4|webm|mov)$/i.test(m||'');
 
 /* ---------- api ---------- */
@@ -435,7 +442,7 @@ function tabsHTML(){
 }
 function mediaHTML(p){
   if(p.type==='text')return `<div class="textcard" data-act="photo">${rich(p.cap)}<div class="burst">${I.heartF}</div></div>`;
-  return `<div class="photo" data-act="photo">${p.type==='reel'?`<video src="${esc(p.media)}" muted loop playsinline preload="metadata"></video>`:`<img src="${esc(p.media)}" alt="Фото ${esc(p.author.handle)}" draggable="false" loading="lazy">`}<div class="burst">${I.heartF}</div></div>`;
+  return `<div class="photo" data-act="photo">${p.type==='reel'?`<video class="av-play" src="${esc(p.media)}" poster="${NOPOSTER}" muted loop playsinline preload="metadata"></video>`:`<img src="${esc(p.media)}" alt="Фото ${esc(p.author.handle)}" draggable="false" loading="lazy">`}<div class="burst">${I.heartF}</div></div>`;
 }
 function postHTML(p){
   const a=p.author;
@@ -460,7 +467,7 @@ function postHTML(p){
 function gridHTML(list,r9){
   if(!list.length)return '';
   return `<div class="grid${r9?' r9':''}">${list.map(p=>`<button data-act="${p.type==='reel'?'openreel':'open'}" data-id="${p.id}" aria-label="Открыть публикацию">${
-    p.type==='text'?`<span class="tx">${esc(p.cap.slice(0,120))}</span>`:p.type==='reel'?`<video src="${esc(p.media)}#t=0.1" muted playsinline preload="metadata"></video>`:`<img src="${esc(p.media)}" alt="" loading="lazy">`}
+    p.type==='text'?`<span class="tx">${esc(p.cap.slice(0,120))}</span>`:p.type==='reel'?`<video class="av-play" src="${esc(p.media)}" poster="${NOPOSTER}" muted loop playsinline preload="metadata"></video>`:`<img src="${esc(p.media)}" alt="" loading="lazy">`}
     <span class="cnt">${p.type==='reel'?I.play:I.heartF}${num(p.likes)}</span></button>`).join('')}</div>`;
 }
 const loading=()=>`<div class="loading">Загружаем…</div>`;
@@ -590,7 +597,7 @@ async function adminView(){
   }else if(S.adminTab==='reports'){
     const d=await api('admin/reports');keep(d.items.map(i=>i.post));
     body=d.items.length?`<div>${d.items.map(i=>{const p=i.post;return `<div class="rep" data-pid="${p.id}"><div class="top2">
-      ${p.type==='text'?`<div class="thumbtx">${esc(p.cap.slice(0,80))}</div>`:p.type==='reel'?`<video class="thumb" src="${esc(p.media)}#t=0.1" muted playsinline preload="metadata"></video>`:`<img class="thumb" src="${esc(p.media)}" alt="">`}
+      ${p.type==='text'?`<div class="thumbtx">${esc(p.cap.slice(0,80))}</div>`:p.type==='reel'?`<video class="thumb av-play" src="${esc(p.media)}" poster="${NOPOSTER}" muted loop playsinline preload="metadata"></video>`:`<img class="thumb" src="${esc(p.media)}" alt="">`}
       <div style="min-width:0;flex:1"><button class="urow" data-act="user" data-h="${esc(i.author.handle)}"><span><b>${hnd(i.author)}${i.author.banned?'<span class="pill red">заблокирован</span>':''}</b><small>${p.type==='reel'?'Рилс':'Пост'} · ${ago(p.ts)} · ${i.reports.length} ${plural(i.reports.length,['жалоба','жалобы','жалоб'])}</small></span></button>
       ${p.cap?`<p class="cap" style="margin-top:4px;max-height:3.2em;overflow:hidden">${esc(p.cap)}</p>`:''}
       <ul>${i.reports.slice(0,5).map(r=>`<li>${esc(r.reason)}${r.text?': «'+esc(r.text)+'»':''}${r.by?' — @'+esc(r.by.handle):''}</li>`).join('')}</ul></div></div>
@@ -632,7 +639,7 @@ function createView(){
     <div class="btns"><button type="button" class="btn" data-act="discard">Отмена</button><button class="btn pri" id="pubbtn">Опубликовать</button></div>`;
   if(d.text)return head+`<form class="create gut" id="pub"><div class="form"><label>Текст поста от ${hnd(ME)}<textarea id="cap" rows="7" maxlength="2200" placeholder="Новости, обновления, правила">${esc(d.cap||'')}</textarea></label></div>${tail}</form>`;
   if(d.video)return head+`<form class="create gut" id="pub">
-    <div class="photo" style="aspect-ratio:9/16;max-height:60vh;margin-inline:auto"><video src="${d.url}" autoplay muted loop playsinline></video></div>
+    <div class="photo" style="aspect-ratio:9/16;max-height:60vh;margin-inline:auto"><video src="${d.url}" poster="${NOPOSTER}" autoplay muted loop playsinline></video></div>
     <div class="form"><label>Подпись к рилсу<textarea id="cap" rows="3" maxlength="2200" placeholder="О чём это видео? #теги и @упоминания работают">${esc(d.cap||'')}</textarea></label></div>${tail}</form>`;
   return head+`<form class="create gut" id="pub">
     <div class="photo"><img id="pv" src="${d.src}" alt="Предпросмотр" style="filter:${FILTERS[d.f][1]}"></div>
@@ -649,7 +656,7 @@ async function reelsView(){
 }
 function reelHTML(r){
   const a=r.author;
-  return `<section class="reel" data-rid="${r.id}"><video class="rmedia" src="${esc(r.media)}" muted loop playsinline preload="metadata"></video>
+  return `<section class="reel" data-rid="${r.id}"><video class="rmedia" src="${esc(r.media)}" poster="${NOPOSTER}" muted loop playsinline preload="auto"></video>
     <div class="rtap" data-act="rtap"></div><div class="burst">${I.heartF}</div><div class="rpause" hidden><span>${I.play}</span></div>
     <div class="rside">
       <button class="like" data-act="like" aria-label="Нравится" aria-pressed="${r.liked}">${I.heart}<span>${num(r.likes)}</span></button>
