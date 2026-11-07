@@ -32,6 +32,7 @@ public class MainActivity extends Activity {
     private WebView web;
     private View offline;
     private ValueCallback<Uri[]> fileCallback;
+    private boolean triedFallback = false;
 
     private boolean isDark() {
         return (getResources().getConfiguration().uiMode & Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES;
@@ -70,7 +71,18 @@ public class MainActivity extends Activity {
 
             @Override
             public void onReceivedError(WebView view, WebResourceRequest req, WebResourceError err) {
-                if (req.isForMainFrame()) offline.setVisibility(View.VISIBLE);
+                if (!req.isForMainFrame()) return;
+                String url = req.getUrl().toString();
+                view.stopLoading();
+                // new domain not reachable (DNS not propagated, VPN cache) -> try the old address once
+                if (HOST.equals(req.getUrl().getHost()) && !triedFallback) {
+                    triedFallback = true;
+                    view.loadUrl(url.replace(HOST, OLD_HOST));
+                    return;
+                }
+                view.loadUrl("about:blank");
+                offline.setVisibility(View.VISIBLE);
+                offline.bringToFront();
             }
 
             @Override
@@ -135,7 +147,8 @@ public class MainActivity extends Activity {
         retry.setText("Повторить");
         retry.setOnClickListener(v -> {
             offline.setVisibility(View.GONE);
-            web.reload();
+            triedFallback = false;
+            web.loadUrl(HOME);
         });
 
         box.addView(title);

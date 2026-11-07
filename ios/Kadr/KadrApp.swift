@@ -82,7 +82,8 @@ final class WebViewController: UIViewController, WKNavigationDelegate, WKUIDeleg
         let retry = UIButton(configuration: cfg, primaryAction: UIAction { [weak self] _ in
             guard let self else { return }
             self.offline.isHidden = true
-            if self.web.url == nil { self.web.load(URLRequest(url: self.home)) } else { self.web.reload() }
+            self.triedFallback = false
+            self.web.load(URLRequest(url: self.home))
         })
 
         offline.axis = .vertical
@@ -124,7 +125,15 @@ final class WebViewController: UIViewController, WKNavigationDelegate, WKUIDeleg
         return nil
     }
 
+    private var triedFallback = false
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+        // new domain not reachable yet -> try the old address once
+        if !triedFallback, let failed = (error as NSError).userInfo[NSURLErrorFailingURLErrorKey] as? URL ?? webView.url,
+           failed.host == home.host, var c = URLComponents(url: failed, resolvingAgainstBaseURL: false) {
+            triedFallback = true
+            c.host = oldHost
+            if let u = c.url { webView.load(URLRequest(url: u)); return }
+        }
         offline.isHidden = false
     }
 
