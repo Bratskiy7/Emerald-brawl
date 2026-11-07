@@ -155,12 +155,12 @@ function keepMail(item) {
   const all = Object.values(db.mailbox); if (all.length > 3000) for (const x of all.sort((a, b) => a.ts - b.ts).slice(0, all.length - 3000)) delete db.mailbox[x.id];
   save(); return m;
 }
-async function sendMail({ to, subject, text, from = 'noreply', fromName = 'Кадр', replyTo, inReplyTo, keep = false }) {
+async function sendMail({ to, subject, text, from = 'noreply', fromName = 'Кадр', replyTo, inReplyTo, keep = false, extraHeaders }) {
   const dom = mailDomain();
   let fromAddr = from.includes('@') ? from : dom ? `${from}@${dom}` : '';
   if (relayReady() && !(MAIL.from && dom && MAIL.from.endsWith('@' + dom))) fromAddr = MAIL.from || MAIL.user;
   if (!fromAddr) throw new Error('Почта не настроена');
-  const msg = M.buildMessage({ from: fromAddr, fromName, to, subject, text, replyTo, inReplyTo, domain: dom || fromAddr.split('@')[1] });
+  const msg = M.buildMessage({ from: fromAddr, fromName, to, subject, text, replyTo, inReplyTo, domain: dom || fromAddr.split('@')[1], extraHeaders });
   const sig = dom && fromAddr.endsWith('@' + dom) ? M.dkimSign(msg, { domain: dom, selector: 'mail', privateKey: dkim().privateKey }) : null;
   const data = M.serialize(msg, sig);
   let error = null;
@@ -258,7 +258,7 @@ function meView(u) {
   const t = Object.values(db.tickets).filter(t => t.userId === u.id && t.unreadUser).length;
   const out = { ...pubUser(u, u), role: u.role || 'user', supportUnread: t, activityUnread: (db.activity[u.id] || []).filter(a => !a.read).length,
     tg: { available: !!TG.token, bot: TG.username || null, linked: !!u.tg, notify: !!(u.tg && u.tg.notify !== false) },
-    email: u.email || null, emailVerified: !!u.emailVerified, mailAvailable: mailReady(),
+    email: u.email || null, emailVerified: !!u.emailVerified, mailAvailable: mailReady(), newsEmail: !!u.newsEmail,
     invite: { ...inviteStats(u), path: '?ref=' + u.handle } };
   if (u.role === 'admin') {
     out.adminOpen = Object.values(db.tickets).filter(t => t.status === 'open').length;
@@ -410,6 +410,7 @@ route('PATCH', '/api/me', 'user', async (req, res, me) => {
   if (b.name !== undefined) { const n = clean(b.name, 40); need(n, 400, 'Имя не может быть пустым'); me.name = n; }
   if (b.bio !== undefined) me.bio = clean(b.bio, 300);
   if (b.tgNotify !== undefined && me.tg) me.tg.notify = !!b.tgNotify;
+  if (b.newsEmail !== undefined) me.newsEmail = !!b.newsEmail;
   if (b.avatar !== undefined) { need(b.avatar === null || (mediaOk(b.avatar) && !/\.(mp4|webm|mov)$/.test(b.avatar)), 400, 'Неверное фото профиля'); me.avatar = b.avatar; }
   if (b.handle !== undefined && b.handle !== me.handle) {
     need(!me.official, 400, 'Имя официального аккаунта менять нельзя');
@@ -523,6 +524,21 @@ route('POST', '/api/posts', 'user', async (req, res, me) => {
   }
   const p = { id: newId('p'), userId: me.id, type, media: type === 'text' ? null : b.media, cap, loc, ts: Date.now(), likes: [], comments: [] };
   db.posts[p.id] = p; save(); send(res, 200, { post: pubPost(p, me) });
+  if (me.official && b.notifyAll) (async () => {
+    const short = (cap || (type === 'reel' ? 'Новый рилс' : 'Новый пост')).slice(0, 300);
+    for (const u of Object.values(db.users)) {
+      if (u.banned || u.id === me.id) continue;
+      const list = db.activity[u.id] ??= [];
+      list.unshift({ id: newId('a'), ts: Date.now(), read: false, type: 'newpost', fromId: me.id, postId: p.id, text: short.slice(0, 200) });
+      if (list.length > 200) list.length = 200;
+    }
+    save();
+    for (const u of Object.values(db.users)) {
+      if (u.banned || u.id === me.id || !u.tg || u.tg.notify === false) continue;
+      notify(u.id, `📣 <b>Кадр</b>: ${htmlEsc(short)}`, '?p=' + p.id, 'Открыть пост');
+      await sleep(60);
+    }
+  })().catch(e => console.error(e));
 });
 route('GET', '/api/posts/:id', 'user', async (req, res, me, id) => send(res, 200, { post: pubPost(findPost(id), me, true) }));
 route('DELETE', '/api/posts/:id', 'user', async (req, res, me, id) => {
@@ -807,6 +823,74 @@ route('GET', '/api/admin/mail-setup', 'admin', async (req, res) => {
     { what: 'Политика проверки (DMARC)', type: 'TXT', name: '_dmarc', value: 'v=DMARC1; p=none', ok: dmarc.some(t => t.startsWith('v=DMARC1')) },
   ] });
 });
+/* ---------------- broadcasts ---------------- */
+db.broadcasts = db.broadcasts || {};
+const SECRET_FILE = path.join(DIR, 'secret.key');
+if (!fs.existsSync(SECRET_FILE)) fs.writeFileSync(SECRET_FILE, crypto.randomBytes(32).toString('hex'), { mode: 0o600 });
+const SECRET = fs.readFileSync(SECRET_FILE, 'utf8').trim();
+const unsubToken = uid => crypto.createHmac('sha256', SECRET).update('unsub:' + uid).digest('hex').slice(0, 32);
+const unsubUrl = u => (BASE || '/') + 'unsubscribe?u=' + u.id + '&t=' + unsubToken(u.id);
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+function audience() {
+  const users = Object.values(db.users).filter(u => !u.banned && !u.official);
+  return { app: users.length, tg: users.filter(u => u.tg && u.tg.notify !== false).length + Object.values(db.users).filter(u => u.official && u.tg).length,
+    email: users.filter(u => u.email && u.emailVerified && u.newsEmail).length, tgReady: !!TG.token, mailReady: mailReady() };
+}
+async function runBroadcast(bc, onlyUser) {
+  const off = official();
+  const targets = onlyUser ? [onlyUser] : Object.values(db.users).filter(u => !u.banned);
+  const st = bc.stats;
+  const tgText = `📣 <b>${htmlEsc(bc.title)}</b>\n\n${htmlEsc(bc.text)}`;
+  if (bc.channels.app) for (const u of targets) if (u.id !== off.id || onlyUser) {
+    const list = db.activity[u.id] ??= [];
+    list.unshift({ id: newId('a'), ts: Date.now(), read: false, type: 'announce', fromId: off.id, text: (bc.title ? bc.title + '\n' : '') + bc.text });
+    if (list.length > 200) list.length = 200; st.app++;
+  }
+  save();
+  if (bc.channels.tg && TG.token) for (const u of targets) {
+    if (!u.tg || u.tg.notify === false) continue;
+    const r = await tgCall('sendMessage', { chat_id: u.tg.chatId, text: tgText, parse_mode: 'HTML', disable_web_page_preview: true, reply_markup: openBtn('Открыть Кадр') });
+    if (r && r.ok) st.tg++; else { st.tgFailed++; if (r && r.error_code === 403) u.tg = null; }
+    await sleep(60);
+  }
+  if (bc.channels.email && mailReady()) for (const u of targets) {
+    if (!u.email || !u.emailVerified || (!u.newsEmail && !onlyUser)) continue;
+    const link = unsubUrl(u);
+    try {
+      await sendMail({ to: u.email, from: 'news', fromName: 'Кадр', subject: bc.title || 'Новости Кадра',
+        text: `${bc.text}\n\n—\nОткрыть Кадр: ${BASE || ''}\nОтписаться от новостей: ${link}`,
+        extraHeaders: [['List-Unsubscribe', `<${link}>`], ['List-Unsubscribe-Post', 'List-Unsubscribe=One-Click']] });
+      st.email++;
+    } catch (e) { st.emailFailed++; }
+    save(); await sleep(onlyUser ? 0 : 2000);
+  }
+  bc.status = 'done'; bc.doneAt = Date.now(); save();
+}
+route('GET', '/api/admin/broadcasts', 'admin', async (req, res) => {
+  const list = Object.values(db.broadcasts).sort((a, b) => b.ts - a.ts).slice(0, 50)
+    .map(b => ({ ...b, by: db.users[b.by] ? lite(db.users[b.by]) : null }));
+  send(res, 200, { items: list, audience: audience() });
+});
+route('POST', '/api/admin/broadcasts', 'admin', async (req, res, me) => {
+  const b = await readJson(req);
+  const title = clean(b.title, 120), text = String(b.text || '').trim().slice(0, 3000);
+  need(text, 400, 'Напишите текст рассылки');
+  const ch = { app: !!(b.channels && b.channels.app), tg: !!(b.channels && b.channels.tg), email: !!(b.channels && b.channels.email), post: !!(b.channels && b.channels.post) };
+  need(ch.app || ch.tg || ch.email || ch.post, 400, 'Выберите хотя бы один канал');
+  if (b.test) {
+    const bc = { title: '[Тест] ' + title, text, channels: ch, stats: { app: 0, tg: 0, tgFailed: 0, email: 0, emailFailed: 0 } };
+    await runBroadcast(bc, me);
+    return send(res, 200, { test: true, stats: bc.stats, note: !me.email || !me.emailVerified ? 'Тестовое письмо не отправлено: у вашего аккаунта нет подтверждённой почты' : '' });
+  }
+  const last = Object.values(db.broadcasts).sort((a, x) => x.ts - a.ts)[0];
+  need(!last || Date.now() - last.ts > 10 * 60e3 || last.status === 'done' && Date.now() - last.ts > 60e3, 429, 'Следующую рассылку можно отправить через несколько минут');
+  const bc = { id: newId('b'), title, text, channels: ch, ts: Date.now(), by: me.id, status: 'sending', stats: { app: 0, tg: 0, tgFailed: 0, email: 0, emailFailed: 0 } };
+  db.broadcasts[bc.id] = bc;
+  if (ch.post) { const p = { id: newId('p'), userId: official().id, type: 'text', media: null, ts: Date.now(), likes: [], comments: [], loc: '', cap: (title ? title + '\n\n' : '') + text }; db.posts[p.id] = p; bc.postId = p.id; }
+  save(); send(res, 200, { ok: true, id: bc.id });
+  runBroadcast(bc).catch(e => { console.error(e); bc.status = 'error'; save(); });
+});
+
 route('GET', '/api/admin/reports', 'admin', async (req, res, me) => {
   const groups = {};
   for (const r of Object.values(db.reports)) {
@@ -850,7 +934,14 @@ const server = http.createServer(async (req, res) => {
       }
       return fail(res, 404, 'Нет такого адреса');
     }
-    if (req.method !== 'GET' && req.method !== 'HEAD') return fail(res, 405, 'Метод не поддерживается');
+    if (req.method !== 'GET' && req.method !== 'HEAD' && url !== '/unsubscribe') return fail(res, 405, 'Метод не поддерживается');
+    if (url === '/unsubscribe') {
+      const q = new URL(req.url, 'http://x').searchParams; const u = db.users[q.get('u')];
+      const ok = u && q.get('t') && crypto.timingSafeEqual(Buffer.from(unsubToken(u.id)), Buffer.from(String(q.get('t')).padEnd(32).slice(0, 32)));
+      if (ok) { u.newsEmail = false; save(); }
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+      return res.end(`<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Кадр</title><body style="font-family:system-ui,sans-serif;max-width:480px;margin:15vh auto;padding:0 20px;text-align:center"><h2>${ok ? 'Вы отписались от новостей Кадра' : 'Ссылка устарела'}</h2><p>${ok ? 'Писем с новостями больше не будет. Коды подтверждения и сброса пароля по-прежнему приходят. Подписаться снова можно в настройках профиля.' : 'Отписаться можно в настройках профиля Кадра.'}</p><p><a href="./">Открыть Кадр</a></p></body>`);
+    }
     if (url.startsWith('/uploads/')) {
       const name = url.slice(9); if (!/^[a-f0-9]{32}\.\w{3,4}$/.test(name)) return fail(res, 404, 'Нет файла');
       return serveFile(req, res, path.join(UP, name), 'public, max-age=31536000, immutable');

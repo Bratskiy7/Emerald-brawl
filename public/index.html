@@ -657,12 +657,29 @@ async function ticketView(){
 }
 /* admin */
 async function adminView(){
-  const tabs=[['tickets','Обращения',ME.adminOpen],['reports','Жалобы',ME.adminReports],['mail','Почта',ME.adminMail],['users','Люди'],['stats','Цифры']];
+  const tabs=[['tickets','Обращения',ME.adminOpen],['reports','Жалобы',ME.adminReports],['broadcast','Рассылка'],['mail','Почта',ME.adminMail],['users','Люди'],['stats','Цифры']];
   let body='';
   if(S.adminTab==='tickets'){
     const d=await api('admin/tickets?status='+S.tstatus);
     body=`<div class="chips" style="padding-top:12px">${[['open','Ждут ответа'],['answered','Отвечены'],['closed','Закрыты'],['all','Все']].map(([k,l])=>`<button class="chip" data-act="tstatus" data-s="${k}" aria-pressed="${S.tstatus===k}">${l}${k==='open'&&ME.adminOpen?`<span class="n">${ME.adminOpen}</span>`:''}</button>`).join('')}</div>
       ${d.tickets.length?`<div class="tlist">${d.tickets.map(t=>ticketRow(t,true)).join('')}</div>`:`<div class="empty"><strong>Пусто</strong>${S.tstatus==='open'?'Все обращения разобраны':'Здесь пока ничего нет'}</div>`}`;
+  }else if(S.adminTab==='broadcast'){
+    const d=await api('admin/broadcasts');const A=d.audience;
+    const ch=(k,l,n,dis,hint)=>`<label style="display:flex;flex-direction:row;gap:10px;align-items:flex-start;font-weight:600;font-size:14px;text-transform:none;letter-spacing:0;color:var(--fg)"><input type="checkbox" id="bc-${k}" ${dis?'disabled':k==='app'?'checked':''} style="width:20px;height:20px;accent-color:var(--accent);margin-top:1px"><span>${l} <span style="color:var(--muted);font-weight:500">${n}</span>${hint?`<br><small style="color:var(--muted);font-weight:500">${hint}</small>`:''}</span></label>`;
+    body=`<form class="card form" id="bcf" style="margin-top:6px"><h3>📣 Новая рассылка от @kadr</h3>
+      <input id="bc-title" maxlength="120" placeholder="Заголовок, например: Новое обновление!">
+      <textarea id="bc-text" rows="6" maxlength="3000" required placeholder="Текст рассылки"></textarea>
+      ${ch('app','В приложении (уведомления)',`— ${num(A.app)} чел.`)}
+      ${ch('tg','В Telegram',`— ${num(A.tg)} чел.`,!A.tgReady,A.tgReady?'':'бот не подключён')}
+      ${ch('email','На почту',`— ${num(A.email)} подписались`,!A.mailReady,'только тем, кто включил «Получать новости Кадра»; в письме есть ссылка «Отписаться»')}
+      ${ch('post','Опубликовать пост в канале @kadr','')}
+      <p class="err" id="bc-err" hidden></p>
+      <div class="btns"><button type="button" class="btn" data-act="bctest">Отправить себе (тест)</button><button class="btn pri" id="bc-send">Отправить всем</button></div></form>
+      <h2 class="sec-h" style="margin:18px 0 6px">История</h2>
+      ${d.items.length?d.items.map(b=>`<div class="rep"><div><b>${esc(b.title||'Без заголовка')}</b> <span class="pill ${b.status==='done'?'blue':''}">${b.status==='done'?'отправлено':b.status==='sending'?'отправляется…':'ошибка'}</span></div>
+        <p class="cap" style="max-height:4.4em;overflow:hidden;color:var(--muted)">${esc(b.text)}</p>
+        <small style="color:var(--muted)">${new Date(b.ts).toLocaleString('ru-RU',{dateStyle:'short',timeStyle:'short'})}${b.by?' · @'+esc(b.by.handle):''} · ${[b.channels.app?`приложение ${num(b.stats.app)}`:'',b.channels.tg?`Telegram ${num(b.stats.tg)}${b.stats.tgFailed?` (не дошло ${b.stats.tgFailed})`:''}`:'',b.channels.email?`почта ${num(b.stats.email)}${b.stats.emailFailed?` (ошибок ${b.stats.emailFailed})`:''}`:'',b.channels.post?'пост в канале':''].filter(Boolean).join(' · ')}</small></div>`).join('')
+        :'<div class="empty" style="padding:20px">Рассылок ещё не было</div>'}`;
   }else if(S.adminTab==='mail'){
     const box=S.mailBox||'in';
     const sub=`<div class="chips"><button class="chip" data-act="compose" style="background:var(--accent);color:#fff;border-color:var(--accent)">✎ Написать</button>${[['in','Входящие'],['out','Отправленные'],['setup','Настройка']].map(([k,l])=>`<button class="chip" data-act="mailbox" data-b="${k}" aria-pressed="${box===k}">${l}</button>`).join('')}</div>`;
@@ -726,7 +743,7 @@ function createView(){
   const head=topBar(`${backBtn('home')}<h1>Новая публикация</h1><span style="width:40px"></span>`);
   if(!d)return head+`<div class="create gut"><div class="drop" id="drop">${I.image}<strong>Фото или видео</strong><span>Фото станет постом, вертикальное видео станет рилсом. Перетащите файл сюда или выберите на устройстве.</span>
     <div class="btns"><button class="btn pri" data-act="pick">Выбрать файл</button>${ME.role==='admin'?'<button class="btn" data-act="textpost">Текстовый пост</button>':''}</div></div></div>`;
-  const tail=`<p class="err" id="c-err" hidden></p><div class="prog" id="c-prog" hidden><b></b></div>
+  const tail=`${ME.official?`<label style="display:flex;gap:10px;align-items:center;font-weight:700;font-size:14px"><input type="checkbox" id="c-all" checked style="width:20px;height:20px;accent-color:var(--accent)"> Оповестить всех (уведомление в приложении и Telegram)</label>`:''}<p class="err" id="c-err" hidden></p><div class="prog" id="c-prog" hidden><b></b></div>
     <div class="btns"><button type="button" class="btn" data-act="discard">Отмена</button><button class="btn pri" id="pubbtn">Опубликовать</button></div>`;
   if(d.text)return head+`<form class="create gut" id="pub"><div class="form"><label>Текст поста от ${hnd(ME)}<textarea id="cap" rows="7" maxlength="2200" placeholder="Новости, обновления, правила">${esc(d.cap||'')}</textarea></label></div>${tail}</form>`;
   if(d.video)return head+`<form class="create gut" id="pub">
@@ -826,6 +843,7 @@ function emailCard(){
     <p>${!has?'Добавьте почту, чтобы восстановить пароль, если забудете его.':ok?'Почта подтверждена ✓. На неё придёт код, если вы забудете пароль.':'Почта не подтверждена. Без подтверждения восстановить пароль по ней не получится.'}</p>
     <input id="em-v" type="email" maxlength="120" autocapitalize="none" spellcheck="false" value="${esc(ME.email||'')}" placeholder="name@yandex.ru" required>
     <p class="err" id="em-err" hidden></p>
+    ${ok?`<label style="display:flex;flex-direction:row;gap:10px;align-items:center;font-weight:700;text-transform:none;letter-spacing:0;color:var(--fg);font-size:14px"><input type="checkbox" data-act="newsemail" ${ME.newsEmail?'checked':''} style="width:20px;height:20px;accent-color:var(--accent)"> Получать новости Кадра на почту</label>`:''}
     <div class="btns">${has&&!ok?'<button type="button" class="btn pri" data-act="verifyemail">Ввести код</button>':''}<button class="btn${has&&!ok?'':' pri'}">${!has?'Добавить почту':ok?'Сменить почту':'Отправить письмо ещё раз'}</button></div></form>`;
 }
 function verifySheet(){
@@ -864,6 +882,7 @@ function reportSheet(id){
 }
 async function copyText(t,okMsg){try{await navigator.clipboard.writeText(t);toast(okMsg||'Скопировано');}catch(x){toast('Не удалось скопировать: выделите текст вручную');}}
 
+const bcBody=()=>({title:$('#bc-title').value,text:$('#bc-text').value,channels:{app:$('#bc-app').checked,tg:$('#bc-tg').checked,email:$('#bc-email').checked,post:$('#bc-post').checked}});
 /* ---------- admin mailbox ---------- */
 async function adminMailView(){
   const d=await api('admin/mail/'+S.mailId);const m=d.mail;refreshMe();
@@ -893,7 +912,7 @@ function composeSheet(){
 async function activityView(){
   const d=await api('activity');ME.activityUnread=0;
   const verb=a=>({like:`оценил(-а) ваш ${a.post&&a.post.type==='reel'?'рилс':'пост'}`,comment:`прокомментировал(-а): «${esc(a.text)}»`,mention:`упомянул(-а) вас: «${esc(a.text)}»`,
-    follow:'подписался(-ась) на вас',invite:'зарегистрировался(-ась) по вашему приглашению'}[a.type]||'');
+    follow:'подписался(-ась) на вас',invite:'зарегистрировался(-ась) по вашему приглашению',announce:`<span style="white-space:pre-line">📣 ${esc(a.text)}</span>`,newpost:`📣 ${esc(a.text)}`}[a.type]||'');
   const row=a=>`<div class="act${a.read?'':' unread'}"><button data-act="user" data-h="${esc(a.from.handle)}"><img class="av" src="${avOf(a.from)}" alt=""></button>
     <p><b data-act="user" data-h="${esc(a.from.handle)}" style="cursor:pointer">${hnd(a.from)}</b> ${verb(a)}<small>${ago(a.ts)}</small></p>
     ${a.post?`<button data-act="${a.type==='comment'||a.type==='mention'?'actcomments':a.post.type==='reel'?'openreel':'open'}" data-id="${a.post.id}" aria-label="Открыть">${a.post.type==='text'?'<span class="thx" style="display:block"></span>':a.post.type==='reel'?`<video class="th av-play" src="${esc(a.post.media)}" poster="${NOPOSTER}" muted loop playsinline preload="metadata"></video>`:`<img class="th" src="${esc(a.post.media)}" alt="">`}</button>`
@@ -988,7 +1007,7 @@ async function publish(){
       if(d.video){type='reel';media=(await upload(d.file,d.type,onp)).url;}
       else{const img=await loadImage(d.src);const c=document.createElement('canvas');c.width=img.width;c.height=img.height;const x=c.getContext('2d');x.filter=FILTERS[d.f][1];x.drawImage(img,0,0);
         const blob=await new Promise(r=>c.toBlob(r,'image/jpeg',.86));media=(await upload(blob,'image/jpeg',onp)).url;}}
-    await api('posts',{body:{type,media,cap:d.cap,loc:d.loc}});
+    await api('posts',{body:{type,media,cap:d.cap,loc:d.loc,notifyAll:!!$('#c-all')?.checked}});
     if(d.url)URL.revokeObjectURL(d.url);S.draft=null;S.tab=type==='reel'?'reels':'feed';S.user=null;render();toast(type==='reel'?'Рилс опубликован':'Опубликовано');
   }catch(e){err.textContent=e.message;err.hidden=false;btn.disabled=false;prog.hidden=true;}
 }
@@ -1011,6 +1030,10 @@ function bindView(){
       const to=(m.mail.replyTo||m.mail.from).match(/<([^>]+)>/)?.[1]||(m.mail.replyTo||m.mail.from);
       await api('admin/mail/send',{body:{from:$('#mr-from').value,to,subject:subj,text:$('#mr-text').value,replyId:S.mailId}});toast('Ответ отправлен');$('#mr-text').value='';}
     catch(x){const er=$('#mr-err');er.textContent=x.message;er.hidden=false;}bt.disabled=false;});
+  const bcf=$('#bcf');if(bcf)bcf.addEventListener('submit',async e=>{e.preventDefault();const bt=$('#bc-send'),er=$('#bc-err');er.hidden=true;
+    if(!bt.dataset.sure){const A=bcBody();const n=[A.channels.app&&'приложение',A.channels.tg&&'Telegram',A.channels.email&&'почта',A.channels.post&&'пост в канале'].filter(Boolean).join(', ');
+      bt.dataset.sure='1';bt.textContent='Точно отправить всем? ('+(n||'нет каналов')+')';setTimeout(()=>{if(bt.isConnected){delete bt.dataset.sure;bt.textContent='Отправить всем';}},5000);return;}
+    bt.disabled=true;try{await api('admin/broadcasts',{body:bcBody()});toast('Рассылка запущена');render(true);}catch(x){er.textContent=x.message;er.hidden=false;bt.disabled=false;}});
   const pwf=$('#pwf');if(pwf)pwf.addEventListener('submit',async e=>{e.preventDefault();const err=$('#p-err');err.hidden=true;
     try{await api('me/password',{body:{old:$('#p-old').value,password:$('#p-new').value}});pwf.reset();toast('Пароль изменён. Другие устройства вышли из аккаунта');}
     catch(x){err.textContent=x.message;err.hidden=false;}});
@@ -1080,6 +1103,10 @@ document.addEventListener('click',async e=>{
     case 'resetagain':S.resetHandle=null;showReset();break;
     case 'verifyemail':verifySheet();break;
     case 'mailbox':S.mailBox=a.dataset.b;render(true);break;
+    case 'newsemail':{const d=await api('me',{method:'PATCH',body:{newsEmail:a.checked}});ME=d.me;toast(a.checked?'Будем присылать новости Кадра':'Новости на почту отключены');break;}
+    case 'bctest':{const f=$('#bcf');const er=$('#bc-err');er.hidden=true;
+      try{const d=await api('admin/broadcasts',{body:{...bcBody(),test:true}});toast('Тест отправлен вам: приложение '+d.stats.app+', Telegram '+d.stats.tg+', почта '+d.stats.email);if(d.note){er.textContent=d.note;er.hidden=false;}refreshMe();}
+      catch(x){er.textContent=x.message;er.hidden=false;}break;}
     case 'compose':composeSheet();break;
     case 'amail':S.sub='amail';S.mailId=a.dataset.id;render();break;
     case 'tomail':S.sub='admin';S.adminTab='mail';render();break;

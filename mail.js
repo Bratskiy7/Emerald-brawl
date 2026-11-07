@@ -88,7 +88,7 @@ const addrOf = s => { const m = /<([^>]+)>/.exec(s || ''); return (m ? m[1] : St
 
 /* ---------------- building and signing outgoing mail ---------------- */
 function encWord(s) { return /^[\x20-\x7e]*$/.test(s) ? s : `=?UTF-8?B?${b64(s)}?=`; }
-function buildMessage({ from, fromName, to, subject, text, replyTo, inReplyTo, domain }) {
+function buildMessage({ from, fromName, to, subject, text, replyTo, inReplyTo, domain, extraHeaders }) {
   const id = `<${crypto.randomBytes(12).toString('hex')}@${domain || from.split('@')[1]}>`;
   const headers = [
     ['From', fromName ? `${encWord(fromName)} <${from}>` : `<${from}>`],
@@ -102,6 +102,7 @@ function buildMessage({ from, fromName, to, subject, text, replyTo, inReplyTo, d
   ];
   if (replyTo) headers.push(['Reply-To', `<${replyTo}>`]);
   if (inReplyTo) { headers.push(['In-Reply-To', inReplyTo]); headers.push(['References', inReplyTo]); }
+  for (const h of extraHeaders || []) headers.push(h);
   const body = b64(text.replace(/\r?\n/g, CRLF)).replace(/.{76}/g, '$&' + CRLF) + CRLF;
   return { headers, body, id };
 }
