@@ -730,7 +730,7 @@ route('GET', '/api/admin/stats', 'admin', async (req, res) => {
     posts: posts.filter(p => p.type !== 'reel').length, reels: posts.filter(p => p.type === 'reel').length, newPosts: posts.filter(p => p.ts > day).length,
     ticketsOpen: tk.filter(t => t.status === 'open').length, ticketsAll: tk.length,
     reportsOpen: new Set(Object.values(db.reports).filter(r => r.status === 'open' && db.posts[r.postId]).map(r => r.postId)).size,
-    telegramLinked: users.filter(u => u.tg).length, invited: users.filter(u => u.invitedBy).length });
+    telegramLinked: users.filter(u => u.tg).length, invited: users.filter(u => u.invitedBy).length, lastBackup: lastBackup() });
 });
 route('GET', '/api/admin/users', 'admin', async (req, res) => {
   const q = clean(new URL(req.url, 'http://x').searchParams.get('q'), 60).toLowerCase().replace(/^@/, '');
@@ -823,6 +823,10 @@ route('GET', '/api/admin/mail-setup', 'admin', async (req, res) => {
     { what: 'Политика проверки (DMARC)', type: 'TXT', name: '_dmarc', value: 'v=DMARC1; p=none', ok: dmarc.some(t => t.startsWith('v=DMARC1')) },
   ] });
 });
+function lastBackup() {
+  const dir = path.join(path.dirname(DIR), 'backups');
+  try { return Math.max(0, ...fs.readdirSync(dir).filter(f => /^data-.*\.json\.gz$/.test(f)).map(f => fs.statSync(path.join(dir, f)).mtimeMs)) || null; } catch { return null; }
+}
 /* ---------------- broadcasts ---------------- */
 db.broadcasts = db.broadcasts || {};
 const SECRET_FILE = path.join(DIR, 'secret.key');

@@ -96,6 +96,15 @@ EOF
     || echo "!! certbot не выдал сертификат. Запустите вручную: certbot --nginx -d $DOMAIN"
 fi
 
+# ежедневный бэкап (служба kadr-backup, 04:30)
+cp "$SRC/deploy/backup.sh" "$SRC/deploy/restore.sh" "$APP/"
+printf '[Unit]\nDescription=Kadr backup\n[Service]\nType=oneshot\nExecStart=/bin/bash %s/backup.sh\n' "$APP" > /etc/systemd/system/kadr-backup.service
+printf '[Unit]\nDescription=Kadr nightly backup\n[Timer]\nOnCalendar=*-*-* 04:30\nPersistent=true\nRandomizedDelaySec=10min\n[Install]\nWantedBy=timers.target\n' > /etc/systemd/system/kadr-backup.timer
+systemctl daemon-reload
+systemctl enable --now kadr-backup.timer >/dev/null 2>&1
+if ! ls "$APP/backups"/data-*.json.gz >/dev/null 2>&1; then bash "$APP/backup.sh" --full >/dev/null 2>&1 && echo "Первый бэкап сделан: $APP/backups"; fi
+echo "Бэкап: каждую ночь в 4:30 → $APP/backups (восстановление: bash $APP/restore.sh)"
+
 sleep 1
 systemctl is-active --quiet kadr && echo "Кадр работает: https://$DOMAIN" || { echo "!! Служба не запустилась:"; journalctl -u kadr -n 30 --no-pager; exit 1; }
 if [ -f "$APP/data/ADMIN_PASSWORD.txt" ]; then echo; cat "$APP/data/ADMIN_PASSWORD.txt"; fi

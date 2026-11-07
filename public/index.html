@@ -721,7 +721,9 @@ async function adminView(){
   }else{
     const s=await api('admin/stats');
     const T=(n,l)=>`<div class="tile"><b>${num(n)}</b><span>${l}</span></div>`;
-    body=`<div class="tiles" style="padding-block:14px">${T(s.reportsOpen,'публикаций с жалобами')}${T(s.telegramLinked,'подключили Telegram')}${T(s.invited,'пришли по приглашению')}${T(s.users,'пользователей')}${T(s.newUsers,'новых за сутки')}${T(s.verified,'с галочкой')}${T(s.posts,'постов')}${T(s.reels,'рилсов')}${T(s.newPosts,'публикаций за сутки')}${T(s.ticketsOpen,'обращений ждут ответа')}${T(s.ticketsAll,'обращений всего')}${T(s.banned,'заблокировано')}</div>`;
+    const bk=s.lastBackup?Math.round((Date.now()-s.lastBackup)/36e5):null;
+    body=`<div class="card" style="margin-top:14px"><h3>🗄 Бэкап</h3><p>${s.lastBackup?`Последний: ${new Date(s.lastBackup).toLocaleString('ru-RU',{dateStyle:'short',timeStyle:'short'})}${bk>30?' — <b style="color:var(--heart)">больше суток назад, проверьте сервер</b>':' ✓'}`:'Бэкапов пока нет. Они появятся после обновления сервера.'}</p></div>
+    <div class="tiles" style="padding-block:14px">${T(s.reportsOpen,'публикаций с жалобами')}${T(s.telegramLinked,'подключили Telegram')}${T(s.invited,'пришли по приглашению')}${T(s.users,'пользователей')}${T(s.newUsers,'новых за сутки')}${T(s.verified,'с галочкой')}${T(s.posts,'постов')}${T(s.reels,'рилсов')}${T(s.newPosts,'публикаций за сутки')}${T(s.ticketsOpen,'обращений ждут ответа')}${T(s.ticketsAll,'обращений всего')}${T(s.banned,'заблокировано')}</div>`;
   }
   return topBar(`${backBtn('closesub')}<h1>Админ-панель</h1><span style="width:40px"></span>`)+
    `<div class="gut"><div class="chips" style="padding-top:12px">${tabs.map(([k,l,n])=>`<button class="chip" data-act="atab" data-t="${k}" aria-pressed="${S.adminTab===k}">${l}${n?`<span class="n">${n}</span>`:''}</button>`).join('')}</div>${body}</div>`;
