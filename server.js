@@ -22,6 +22,7 @@ fs.mkdirSync(UP, { recursive: true });
 let db = { users: {}, sessions: {}, posts: {}, tickets: {}, reports: {}, tgLinks: {}, tgOffset: 0, seq: 0 };
 if (fs.existsSync(DB_FILE)) db = Object.assign(db, JSON.parse(fs.readFileSync(DB_FILE, 'utf8')));
 db.reports = db.reports || {}; db.tgLinks = db.tgLinks || {}; db.seq = db.seq || 0;
+db.activity = db.activity || {}; db.stories = db.stories || {}; db.resets = db.resets || {};
 let saveTimer = null;
 function save() { clearTimeout(saveTimer); saveTimer = setTimeout(flush, 300); }
 function flush() {
@@ -128,6 +129,14 @@ async function handleTgUpdate(upd) {
   }
 })();
 
+/* in-app activity feed */
+function addActivity(userId, a) {
+  if (!db.users[userId] || userId === a.fromId) return;
+  const list = db.activity[userId] ??= [];
+  list.unshift({ id: newId('a'), ts: Date.now(), read: false, ...a });
+  if (list.length > 200) list.length = 200;
+  save();
+}
 const notified = new Set(); // like/follow notifications already sent since start (no spam on re-like)
 
 /* ---------------- invites & badges ---------------- */
@@ -174,7 +183,7 @@ function pubPost(p, me, full) {
 }
 function meView(u) {
   const t = Object.values(db.tickets).filter(t => t.userId === u.id && t.unreadUser).length;
-  const out = { ...pubUser(u, u), role: u.role || 'user', supportUnread: t,
+  const out = { ...pubUser(u, u), role: u.role || 'user', supportUnread: t, activityUnread: (db.activity[u.id] || []).filter(a => !a.read).length,
     tg: { available: !!TG.token, bot: TG.username || null, linked: !!u.tg, notify: !!(u.tg && u.tg.notify !== false) },
     invite: { ...inviteStats(u), path: '?ref=' + u.handle } };
   if (u.role === 'admin') {
@@ -299,6 +308,7 @@ route('POST', '/api/register', null, async (req, res) => {
   db.users[u.id] = u; save();
   if (u.invitedBy) {
     const s = inviteStats(inviter);
+    addActivity(inviter.id, { type: 'invite', fromId: u.id });
     notify(inviter.id, `🎉 По вашей ссылке зарегистрировался ${at(u)}!\nКогда друг опубликует первый пост, он засчитается в «Амбассадора»: сейчас ${s.active} из ${s.need}.`, '?u=' + u.handle);
   }
   send(res, 200, { me: meView(u) }, { 'Set-Cookie': startSession(req, res, u) });
@@ -394,7 +404,7 @@ route('POST', '/api/users/:handle/follow', 'user', async (req, res, me, h) => {
   save(); send(res, 200, { user: pubUser(u, me) });
   if (i < 0) {
     const key = me.id + '>' + u.id;
-    if (!notified.has(key)) { notified.add(key); notify(u.id, `👤 ${at(me)} подписался(-ась) на вас`, '?u=' + me.handle); }
+    if (!notified.has(key)) { notified.add(key); addActivity(u.id, { type: 'follow', fromId: me.id }); notify(u.id, `👤 ${at(me)} подписался(-ась) на вас`, '?u=' + me.handle); }
   }
 });
 
@@ -424,7 +434,7 @@ route('POST', '/api/posts/:id/like', 'user', async (req, res, me, id) => {
   save(); send(res, 200, { post: pubPost(p, me) });
   if (i < 0 && p.likes.includes(me.id) && p.userId !== me.id) {
     const key = me.id + '♥' + p.id;
-    if (!notified.has(key)) { notified.add(key); notify(p.userId, `❤️ ${at(me)} оценил(-а) ваш ${p.type === 'reel' ? 'рилс' : 'пост'}${p.cap ? ': «' + htmlEsc(p.cap.slice(0, 60)) + (p.cap.length > 60 ? '…' : '') + '»' : ''}`, '?p=' + p.id); }
+    if (!notified.has(key)) { notified.add(key); addActivity(p.userId, { type: 'like', fromId: me.id, postId: p.id }); notify(p.userId, `❤️ ${at(me)} оценил(-а) ваш ${p.type === 'reel' ? 'рилс' : 'пост'}${p.cap ? ': «' + htmlEsc(p.cap.slice(0, 60)) + (p.cap.length > 60 ? '…' : '') + '»' : ''}`, '?p=' + p.id); }
   }
 });
 route('POST', '/api/posts/:id/save', 'user', async (req, res, me, id) => {
@@ -437,9 +447,10 @@ route('POST', '/api/posts/:id/comments', 'user', async (req, res, me, id) => {
   p.comments.push({ id: newId('c'), userId: me.id, text, ts: Date.now() }); save();
   send(res, 200, { post: pubPost(p, me, true) });
   const short = htmlEsc(text.slice(0, 200)) + (text.length > 200 ? '…' : '');
+  if (p.userId !== me.id) addActivity(p.userId, { type: 'comment', fromId: me.id, postId: p.id, text: text.slice(0, 200) });
   if (p.userId !== me.id) notify(p.userId, `💬 ${at(me)} прокомментировал(-а) ваш ${p.type === 'reel' ? 'рилс' : 'пост'}:\n${short}`, '?p=' + p.id + '&c=1');
   const mentioned = new Set((text.match(/@([a-z0-9._]{3,24})/g) || []).map(h => h.slice(1)));
-  for (const h of mentioned) { const u = byHandle(h); if (u && u.id !== me.id && u.id !== p.userId) notify(u.id, `📣 ${at(me)} упомянул(-а) вас в комментарии:\n${short}`, '?p=' + p.id + '&c=1'); }
+  for (const h of mentioned) { const u = byHandle(h); if (u && u.id !== me.id && u.id !== p.userId) addActivity(u.id, { type: 'mention', fromId: me.id, postId: p.id, text: text.slice(0, 200) }); if (u && u.id !== me.id && u.id !== p.userId) notify(u.id, `📣 ${at(me)} упомянул(-а) вас в комментарии:\n${short}`, '?p=' + p.id + '&c=1'); }
 });
 
 /* reports */
@@ -460,6 +471,97 @@ route('DELETE', '/api/posts/:id/comments/:cid', 'user', async (req, res, me, id,
   const p = findPost(id); const i = p.comments.findIndex(c => c.id === cid); need(i >= 0, 404, 'Комментарий не найден');
   need(p.comments[i].userId === me.id || p.userId === me.id || me.role === 'admin', 403, 'Нельзя удалить чужой комментарий');
   p.comments.splice(i, 1); save(); send(res, 200, { post: pubPost(p, me, true) });
+});
+
+/* activity */
+route('GET', '/api/activity', 'user', async (req, res, me) => {
+  const list = (db.activity[me.id] || []).filter(a => db.users[a.fromId] && !db.users[a.fromId].banned).slice(0, 100);
+  const out = list.map(a => {
+    const p = a.postId && db.posts[a.postId];
+    return { id: a.id, type: a.type, ts: a.ts, read: a.read, text: a.text || '', from: lite(db.users[a.fromId]),
+      isFollowing: me.follows.includes(a.fromId),
+      post: p ? { id: p.id, type: p.type, media: p.media, cap: (p.cap || '').slice(0, 80) } : null };
+  });
+  for (const a of db.activity[me.id] || []) a.read = true;
+  save(); send(res, 200, { items: out });
+});
+
+/* stories (24 h) */
+const STORY_TTL = 24 * 3600e3;
+const liveStory = s => s && Date.now() - s.ts < STORY_TTL && db.users[s.userId] && !db.users[s.userId].banned;
+function cleanupStories() {
+  let changed = false;
+  for (const [id, s] of Object.entries(db.stories)) if (Date.now() - s.ts > STORY_TTL) {
+    delete db.stories[id]; changed = true;
+    if (s.media && !Object.values(db.posts).some(p => p.media === s.media) && !Object.values(db.users).some(u => u.avatar === s.media)) fs.rm(path.join(DIR, s.media), () => {});
+  }
+  for (const [uid, r] of Object.entries(db.resets)) if (r.exp < Date.now()) { delete db.resets[uid]; changed = true; }
+  if (changed) save();
+}
+setInterval(cleanupStories, 10 * 60e3).unref();
+route('GET', '/api/stories', 'user', async (req, res, me) => {
+  const ids = new Set([me.id, ...me.follows]); const groups = {};
+  for (const s of Object.values(db.stories)) {
+    if (!liveStory(s) || !ids.has(s.userId)) continue;
+    (groups[s.userId] ??= []).push(s);
+  }
+  const out = Object.entries(groups).map(([uid, list]) => {
+    list.sort((a, b) => a.ts - b.ts);
+    const items = list.map(s => ({ id: s.id, media: s.media, type: s.type, ts: s.ts, viewed: s.views.includes(me.id), views: uid === me.id ? s.views.length : undefined }));
+    return { user: lite(db.users[uid]), items, seen: items.every(i => i.viewed), last: list[list.length - 1].ts, mine: uid === me.id };
+  }).sort((a, b) => (b.mine - a.mine) || (a.seen - b.seen) || (b.last - a.last));
+  send(res, 200, { groups: out });
+});
+route('POST', '/api/stories', 'user', async (req, res, me) => {
+  need(!limited(req, 'st:' + me.id, 30, 24 * 3600e3), 429, 'Слишком много историй за сутки');
+  const b = await readJson(req); need(mediaOk(b.media), 400, 'Сначала загрузите фото или видео');
+  const s = { id: newId('s'), userId: me.id, media: b.media, type: /\.(mp4|webm|mov)$/.test(b.media) ? 'video' : 'photo', ts: Date.now(), views: [] };
+  db.stories[s.id] = s; save(); send(res, 200, { ok: true, id: s.id });
+});
+route('POST', '/api/stories/:id/view', 'user', async (req, res, me, id) => {
+  const s = db.stories[id]; need(liveStory(s), 404, 'История уже исчезла');
+  if (s.userId !== me.id && !s.views.includes(me.id)) { s.views.push(me.id); save(); }
+  send(res, 200, { ok: true });
+});
+route('GET', '/api/stories/:id/viewers', 'user', async (req, res, me, id) => {
+  const s = db.stories[id]; need(liveStory(s) && (s.userId === me.id || me.role === 'admin'), 404, 'История не найдена');
+  send(res, 200, { viewers: s.views.slice().reverse().map(uid => db.users[uid]).filter(u => u && !u.banned).map(lite) });
+});
+route('DELETE', '/api/stories/:id', 'user', async (req, res, me, id) => {
+  const s = db.stories[id]; need(s && (s.userId === me.id || me.role === 'admin'), 404, 'История не найдена');
+  delete db.stories[id]; save(); send(res, 200, { ok: true });
+});
+
+/* password reset via Telegram */
+route('POST', '/api/reset/request', null, async (req, res) => {
+  need(!limited(req, 'rst', 8, 3600e3), 429, 'Слишком много попыток. Попробуйте через час');
+  const b = await readJson(req); const u = byHandle(String(b.handle || '').trim().replace(/^@/, ''));
+  const generic = { ok: true, message: 'Если к этому аккаунту подключён Telegram, мы отправили туда код. Он действует 10 минут.' };
+  if (!u || u.banned || !u.tg || !TG.token) return send(res, 200, generic);
+  const prev = db.resets[u.id];
+  if (prev && prev.sentAt && Date.now() - prev.sentAt < 60e3) return send(res, 200, generic);
+  const code = String(crypto.randomInt(100000, 1000000)); const salt = crypto.randomBytes(8).toString('hex');
+  db.resets[u.id] = { salt, hash: crypto.scryptSync(code, salt, 32).toString('hex'), exp: Date.now() + 10 * 60e3, tries: 0, sentAt: Date.now() }; save();
+  tgCall('sendMessage', { chat_id: u.tg.chatId, parse_mode: 'HTML',
+    text: `🔑 Код для сброса пароля в Кадре: <code>${code}</code>\n\nДействует 10 минут. Если вы не запрашивали сброс, просто проигнорируйте это сообщение — пароль не изменится.` });
+  send(res, 200, generic);
+});
+route('POST', '/api/reset/confirm', null, async (req, res) => {
+  need(!limited(req, 'rstc', 30, 3600e3), 429, 'Слишком много попыток. Попробуйте через час');
+  const b = await readJson(req); const u = byHandle(String(b.handle || '').trim().replace(/^@/, ''));
+  const r = u && db.resets[u.id];
+  need(r && r.exp > Date.now(), 400, 'Код устарел или не запрашивался. Запросите новый');
+  r.tries++; save();
+  need(r.tries <= 5, 400, 'Слишком много неверных попыток. Запросите новый код');
+  const ok = crypto.timingSafeEqual(crypto.scryptSync(String(b.code || '').trim(), r.salt, 32), Buffer.from(r.hash, 'hex'));
+  need(ok, 400, `Неверный код. Осталось попыток: ${5 - r.tries}`);
+  const pw = String(b.password || ''); need(pw.length >= 6 && pw.length <= 200, 400, 'Новый пароль должен быть не короче 6 символов');
+  Object.assign(u, hashPw(pw)); delete db.resets[u.id];
+  for (const [sid, sv] of Object.entries(db.sessions)) if (sv.userId === u.id) delete db.sessions[sid];
+  if (u.official) fs.rm(path.join(DIR, 'ADMIN_PASSWORD.txt'), () => {});
+  save();
+  if (u.tg) tgCall('sendMessage', { chat_id: u.tg.chatId, text: 'Пароль в Кадре изменён. Все другие устройства вышли из аккаунта.' });
+  send(res, 200, { me: meView(u) }, { 'Set-Cookie': startSession(req, res, u) });
 });
 
 /* support */
