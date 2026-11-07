@@ -6,6 +6,7 @@
 <meta name="theme-color" content="#3246E6">
 <title>Кадр</title>
 <link rel="manifest" href="manifest.webmanifest">
+<script src="https://telegram.org/js/telegram-web-app.js" async></script>
 <link rel="icon" type="image/png" href="icon-192.png">
 <link rel="apple-touch-icon" href="icon-180.png">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -91,6 +92,19 @@ body::before{content:"";position:fixed;inset:0 0 auto;height:env(safe-area-inset
 .vb{display:inline-block;vertical-align:-3px;margin-left:4px;width:15px;height:15px;flex:0 0 auto}
 .vb path{fill:var(--accent)}.vb polyline{fill:none;stroke:#fff;stroke-width:2.4;stroke-linecap:round;stroke-linejoin:round}
 .big-vb .vb{width:19px;height:19px}
+
+.bdg{display:inline-flex;align-items:center;gap:4px;font-size:12px;font-weight:800;border-radius:999px;padding:3px 9px;margin:6px 6px 0 0}
+.bdg.ambassador{background:color-mix(in srgb,var(--accent) 16%,transparent);color:var(--accent)}
+.reasons{display:flex;flex-direction:column;gap:8px}
+.reasons label{display:flex;gap:10px;align-items:center;padding:12px;border:1px solid var(--line);border-radius:12px;font-weight:600;cursor:pointer}
+.reasons input{accent-color:var(--accent);width:18px;height:18px}
+.rep{display:flex;flex-direction:column;gap:10px;padding-block:14px;border-bottom:1px solid var(--line)}
+.rep .top2{display:flex;gap:12px;align-items:flex-start}
+.rep .thumb{width:72px;height:90px;border-radius:10px;object-fit:cover;flex:0 0 auto;background:var(--soft)}
+.rep .thumbtx{width:72px;height:90px;border-radius:10px;flex:0 0 auto;background:linear-gradient(135deg,var(--accent),#7B4BE0 60%,var(--heart));color:#fff;font-size:10px;padding:6px;overflow:hidden}
+.rep ul{margin:4px 0 0;padding-left:18px;font-size:13px;color:var(--muted)}
+.invbar{height:8px;border-radius:4px;background:var(--surface);overflow:hidden;border:1px solid var(--line)}
+.invbar b{display:block;height:100%;background:var(--accent)}
 .offl{font-size:10px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--accent);border:1px solid var(--accent);border-radius:6px;padding:1px 5px;margin-left:6px}
 
 /* tabs */
@@ -340,6 +354,23 @@ const OFFICIAL_AV=(()=>{const c=document.createElement('canvas');c.width=c.heigh
   x.fillRect(0,0,160,160);x.fillStyle='#fff';x.beginPath();x.roundRect?x.roundRect(36,36,88,88,26):x.rect(36,36,88,88);x.fill();x.fillStyle='#3246E6';x.beginPath();x.arc(80,80,22,0,7);x.fill();return c.toDataURL('image/png');})();
 const hnd=u=>esc(u.handle)+(u.verified?VB:'');
 const APK_URL='https://github.com/Bratskiy7/Emerald-brawl/releases/latest/download/kadr.apk';
+let DEEP=null,REF=null;
+(()=>{const q=new URLSearchParams(location.search);
+  try{if(q.get('ref'))localStorage.setItem('kadr-ref',q.get('ref'));REF=localStorage.getItem('kadr-ref');}catch(e){REF=q.get('ref');}
+  if(REF&&!/^[a-z0-9._]{3,24}$/.test(REF))REF=null;
+  if(['p','u','support','admin'].some(k=>q.get(k)))DEEP=q;
+  if(location.search)history.replaceState(null,'',location.pathname);})();
+const BADGES={ambassador:['✦','Амбассадор','Пригласил(-а) 3 друзей']};
+const badgesHTML=b=>(b&&b.length)?`<div>${b.map(k=>BADGES[k]?`<span class="bdg ${k}" title="${BADGES[k][2]}">${BADGES[k][0]} ${BADGES[k][1]}</span>`:'').join('')}</div>`:'';
+const inviteURL=()=>location.origin+location.pathname+ME.invite.path;
+function inviteCard(){
+  const v=ME.invite,done=Math.min(v.active,v.need),has=(ME.badges||[]).includes('ambassador');
+  return `<div class="card"><h3>${has?'✦ Вы амбассадор Кадра':'Пригласите друзей'}</h3>
+    <p>${has?`Спасибо! По вашей ссылке пришли ${v.total} ${plural(v.total,['человек','человека','человек'])}. Продолжайте звать друзей.`:`Пригласите ${v.need} друзей, и вы получите значок «Амбассадор» в профиле. Друг засчитывается, когда опубликует первый пост.`}</p>
+    ${has?'':`<div class="invbar"><b style="width:${done/v.need*100}%"></b></div><p>${done} из ${v.need}${v.total>v.active?` · ещё ${v.total-v.active} ${plural(v.total-v.active,['ждёт','ждут','ждут'])} первого поста`:''}</p>`}
+    <div class="secret" style="font-size:14px">${esc(inviteURL())}</div>
+    <div class="btns"><button class="btn pri" data-act="shareinvite">Поделиться</button><button class="btn" data-act="copyinvite">Скопировать</button></div></div>`;
+}
 const IS_IOS=/iPhone|iPad|iPod/.test(navigator.userAgent)||(navigator.platform==='MacIntel'&&navigator.maxTouchPoints>1);
 const IS_STANDALONE=matchMedia('(display-mode: standalone)').matches||navigator.standalone===true||/KadrApp/.test(navigator.userAgent);
 const IOS_HOWTO='Откройте сайт в Safari, нажмите «Поделиться» (квадрат со стрелкой вверх) и выберите «На экран «Домой»». Кадр появится на главном экране как приложение.';
@@ -383,11 +414,11 @@ function showAuth(){
       <label>Пароль<input id="a-pw" type="password" maxlength="200" autocomplete="${reg?'new-password':'current-password'}" required placeholder="${reg?'не короче 6 символов':''}"></label>
       <p class="err" id="a-err" hidden></p>
       <button class="btn pri" style="min-height:46px">${reg?'Создать аккаунт':'Войти'}</button>
-      ${reg?'<p style="margin:0;font-size:13px;color:var(--muted);text-align:center">После регистрации вы автоматически подпишетесь на официальный канал @kadr</p>':''}
+      ${reg?`<p style="margin:0;font-size:13px;color:var(--muted);text-align:center">${REF?`Вас пригласил(-а) <b style="color:var(--fg)">@${esc(REF)}</b>. `:''}После регистрации вы автоматически подпишетесь на официальный канал @kadr</p>`:''}
     </form></div>`;
   $('#authf').addEventListener('submit',async e=>{e.preventDefault();const err=$('#a-err');err.hidden=true;const btn=e.target.querySelector('.btn');btn.disabled=true;
-    try{const body={handle:$('#a-handle').value.trim().toLowerCase(),password:$('#a-pw').value};if(reg)body.name=$('#a-name').value.trim();
-      const d=await api(reg?'register':'login',{body,auth:true});ME=d.me;S={...S,tab:'feed',user:null,sub:null};render();if(reg)toast('Аккаунт создан. Добро пожаловать!');}
+    try{const body={handle:$('#a-handle').value.trim().toLowerCase(),password:$('#a-pw').value};if(reg){body.name=$('#a-name').value.trim();if(REF)body.ref=REF;}
+      const d=await api(reg?'register':'login',{body,auth:true});ME=d.me;S={...S,tab:'feed',user:null,sub:null};if(reg){REF=null;try{localStorage.removeItem('kadr-ref');}catch(x){}}applyDeepLink();render();if(reg)toast('Аккаунт создан. Добро пожаловать!');}
     catch(x){err.textContent=x.message;err.hidden=false;btn.disabled=false;}});
 }
 
@@ -398,7 +429,7 @@ function tabsHTML(){
   $('#tabsbar').hidden=false;
   const cur=k=>S.tab===k&&!S.user&&!S.sub;
   const t=(k,ic,l)=>`<button class="tab${k==='new'?' new':''}" data-act="tab" data-tab="${k}" aria-label="${l}" ${cur(k)?'aria-current="page"':''}>${k==='new'?`<span>${ic}</span>`:ic}</button>`;
-  const badge=(ME.supportUnread||0)+(ME.adminOpen||0);
+  const badge=(ME.supportUnread||0)+(ME.adminOpen||0)+(ME.adminReports||0);
   $('#tabs').innerHTML=t('feed',I.home,'Лента')+t('explore',I.search,'Поиск')+t('new',I.plus,'Новая публикация')+t('reels',I.reels,'Рилсы')+
    `<button class="tab" data-act="tab" data-tab="me" aria-label="Профиль" ${(S.tab==='me'&&!S.user)||S.sub?'aria-current="page"':''}><img class="meav" src="${avOf(ME)}" alt="">${badge?`<span class="dot">${badge>99?'99+':badge}</span>`:''}</button>`;
 }
@@ -410,7 +441,7 @@ function postHTML(p){
   const a=p.author;
   return `<article class="post" data-id="${p.id}">
     <div class="ph-head"><button class="who" data-act="user" data-h="${esc(a.handle)}"><img class="av" src="${avOf(a)}" alt=""><span style="min-width:0"><b>${hnd(a)}${a.official?'<span class="offl">канал</span>':''}</b>${p.loc?`<small>${esc(p.loc)}</small>`:''}</span></button><span class="when">${ago(p.ts)}</span>
-      ${p.canDelete?`<button class="ibtn" data-act="postmenu" aria-label="Ещё">${I.more}</button>`:''}</div>
+      <button class="ibtn" data-act="postmenu" aria-label="Ещё">${I.more}</button></div>
     ${mediaHTML(p)}
     <div class="acts">
       <button class="like" data-act="like" aria-label="Нравится" aria-pressed="${p.liked}">${I.heart}</button>
@@ -477,14 +508,15 @@ async function exploreView(){
 /* profile */
 async function profileView(h){
   const d=await api('users/'+encodeURIComponent(h));const u=d.user;keep(d.posts);
-  const me=u.isMe;if(me){Object.assign(ME,{followers:u.followers,following:u.following,posts:u.posts});}
+  const me=u.isMe;if(me){try{ME=(await api('me')).me;}catch(e){}}
   const head=me?`<h1 class="big-vb">${hnd(u)}</h1><div class="row">${themeBtn()}<button class="ibtn" data-act="sub" data-sub="settings" aria-label="Настройки">${I.gear}</button></div>`:`${backBtn()}<h1 class="big-vb">${hnd(u)}</h1><span style="width:40px"></span>`;
   let body=`<div class="prow"><img class="big" src="${avOf(u)}" alt="">
       <div class="stats"><div><b>${num(u.posts)}</b><span>${plural(u.posts,['публикация','публикации','публикаций'])}</span></div><div><b>${num(u.followers)}</b><span>${plural(u.followers,['подписчик','подписчика','подписчиков'])}</span></div><div><b>${num(u.following)}</b><span>подписки</span></div></div></div>
-      <div><div class="pname">${esc(u.name)}${u.official?'<span class="offl">официальный канал</span>':''}</div>${u.bio?`<p class="pbio">${rich(u.bio)}</p>`:''}</div>`;
+      <div><div class="pname">${esc(u.name)}${u.official?'<span class="offl">официальный канал</span>':''}</div>${badgesHTML(u.badges)}${u.bio?`<p class="pbio">${rich(u.bio)}</p>`:''}</div>`;
   if(me){
     body+=`<div class="btns"><button class="btn" data-act="sub" data-sub="settings">Редактировать</button><button class="btn" data-act="sub" data-sub="support">Поддержка${ME.supportUnread?`<span class="n">${ME.supportUnread}</span>`:''}</button></div>`;
-    if(ME.role==='admin')body+=`<div class="btns"><button class="btn pri" data-act="sub" data-sub="admin">Админ-панель${ME.adminOpen?`<span class="n">${ME.adminOpen}</span>`:''}</button></div>`;
+    if(ME.role==='admin'){const n=(ME.adminOpen||0)+(ME.adminReports||0);body+=`<div class="btns"><button class="btn pri" data-act="sub" data-sub="admin">Админ-панель${n?`<span class="n">${n}</span>`:''}</button></div>`;}
+    if(!u.official)body+=inviteCard();
     if(!u.verified)body+=`<div class="card"><h3>${VB} Синяя галочка</h3><p>Галочка показывает, что аккаунт настоящий. Заявку рассматривает команда Кадра, ответ придёт в поддержку.</p><button class="btn pri" data-act="askverify">Подать заявку</button></div>`;
   }else body+=`<div class="btns"><button class="btn${u.isFollowing?'':' pri'}" data-act="follow" data-h="${esc(u.handle)}">${u.isFollowing?'Вы подписаны':'Подписаться'}</button></div>`;
   const reels=d.posts.filter(p=>p.type==='reel'),grid=d.posts.filter(p=>p.type!=='reel');
@@ -513,6 +545,7 @@ function settingsView(){
     <p class="err" id="p-err" hidden></p>
     <button class="btn" style="min-height:44px">Сменить пароль</button>
   </form>
+  ${tgCard()}
   ${IS_IOS&&!IS_STANDALONE?`<div class="card"><h3>Приложение для iPhone</h3><p>${IOS_HOWTO}</p></div>`:''}
   ${/KadrApp/.test(navigator.userAgent)||IS_IOS?'':`<div class="card"><h3>Приложение для Android</h3><p>Кадр как отдельное приложение: значок на главном экране, без адресной строки браузера.</p><a class="btn pri" style="display:grid;place-items:center;min-height:44px;text-decoration:none" href="${APK_URL}" target="_blank" rel="noopener">Скачать APK</a></div>`}
   <button class="btn danger" style="min-height:44px" data-act="logout">Выйти из аккаунта</button></div>`;
@@ -548,12 +581,21 @@ async function ticketView(){
 }
 /* admin */
 async function adminView(){
-  const tabs=[['tickets','Обращения'],['users','Пользователи'],['stats','Статистика']];
+  const tabs=[['tickets','Обращения'],['reports','Жалобы'],['users','Люди'],['stats','Цифры']];
   let body='';
   if(S.adminTab==='tickets'){
     const d=await api('admin/tickets?status='+S.tstatus);
     body=`<div class="chips" style="padding-top:12px">${[['open','Ждут ответа'],['answered','Отвечены'],['closed','Закрыты'],['all','Все']].map(([k,l])=>`<button class="chip" data-act="tstatus" data-s="${k}" aria-pressed="${S.tstatus===k}">${l}${k==='open'&&ME.adminOpen?`<span class="n">${ME.adminOpen}</span>`:''}</button>`).join('')}</div>
       ${d.tickets.length?`<div class="tlist">${d.tickets.map(t=>ticketRow(t,true)).join('')}</div>`:`<div class="empty"><strong>Пусто</strong>${S.tstatus==='open'?'Все обращения разобраны':'Здесь пока ничего нет'}</div>`}`;
+  }else if(S.adminTab==='reports'){
+    const d=await api('admin/reports');keep(d.items.map(i=>i.post));
+    body=d.items.length?`<div>${d.items.map(i=>{const p=i.post;return `<div class="rep" data-pid="${p.id}"><div class="top2">
+      ${p.type==='text'?`<div class="thumbtx">${esc(p.cap.slice(0,80))}</div>`:p.type==='reel'?`<video class="thumb" src="${esc(p.media)}#t=0.1" muted playsinline preload="metadata"></video>`:`<img class="thumb" src="${esc(p.media)}" alt="">`}
+      <div style="min-width:0;flex:1"><button class="urow" data-act="user" data-h="${esc(i.author.handle)}"><span><b>${hnd(i.author)}${i.author.banned?'<span class="pill red">заблокирован</span>':''}</b><small>${p.type==='reel'?'Рилс':'Пост'} · ${ago(p.ts)} · ${i.reports.length} ${plural(i.reports.length,['жалоба','жалобы','жалоб'])}</small></span></button>
+      ${p.cap?`<p class="cap" style="margin-top:4px;max-height:3.2em;overflow:hidden">${esc(p.cap)}</p>`:''}
+      <ul>${i.reports.slice(0,5).map(r=>`<li>${esc(r.reason)}${r.text?': «'+esc(r.text)+'»':''}${r.by?' — @'+esc(r.by.handle):''}</li>`).join('')}</ul></div></div>
+      <div class="btns"><button class="btn sm" data-act="${p.type==='reel'?'openreel':'open'}" data-id="${p.id}">Открыть</button><button class="btn sm danger" data-act="repact" data-a="delete">Удалить пост</button>${i.author.banned||i.author.official?'':`<button class="btn sm danger" data-act="repact" data-a="ban">Удалить и заблокировать</button>`}<button class="btn sm" data-act="repact" data-a="dismiss">Нарушений нет</button></div></div>`;}).join('')}</div>`
+      :`<div class="empty"><strong>Жалоб нет</strong>Когда пользователи пожалуются на публикацию, она появится здесь</div>`;
   }else if(S.adminTab==='users'){
     const d=await api('admin/users?q='+encodeURIComponent(S.aq||''));
     body=`<div class="search">${I.search}<input id="aq" type="search" placeholder="Имя или @username" value="${esc(S.aq||'')}" autocomplete="off"></div>
@@ -564,10 +606,10 @@ async function adminView(){
   }else{
     const s=await api('admin/stats');
     const T=(n,l)=>`<div class="tile"><b>${num(n)}</b><span>${l}</span></div>`;
-    body=`<div class="tiles" style="padding-block:14px">${T(s.users,'пользователей')}${T(s.newUsers,'новых за сутки')}${T(s.verified,'с галочкой')}${T(s.posts,'постов')}${T(s.reels,'рилсов')}${T(s.newPosts,'публикаций за сутки')}${T(s.ticketsOpen,'обращений ждут ответа')}${T(s.ticketsAll,'обращений всего')}${T(s.banned,'заблокировано')}</div>`;
+    body=`<div class="tiles" style="padding-block:14px">${T(s.reportsOpen,'публикаций с жалобами')}${T(s.telegramLinked,'подключили Telegram')}${T(s.invited,'пришли по приглашению')}${T(s.users,'пользователей')}${T(s.newUsers,'новых за сутки')}${T(s.verified,'с галочкой')}${T(s.posts,'постов')}${T(s.reels,'рилсов')}${T(s.newPosts,'публикаций за сутки')}${T(s.ticketsOpen,'обращений ждут ответа')}${T(s.ticketsAll,'обращений всего')}${T(s.banned,'заблокировано')}</div>`;
   }
   return topBar(`${backBtn('closesub')}<h1>Админ-панель</h1><span style="width:40px"></span>`)+
-   `<div class="gut"><div class="seg" style="grid-template-columns:repeat(3,1fr);margin-top:12px">${tabs.map(([k,l])=>`<button data-act="atab" data-t="${k}" aria-pressed="${S.adminTab===k}">${l}</button>`).join('')}</div>${body}</div>`;
+   `<div class="gut"><div class="seg" style="grid-template-columns:repeat(4,1fr);margin-top:12px;font-size:13px">${tabs.map(([k,l])=>`<button data-act="atab" data-t="${k}" aria-pressed="${S.adminTab===k}">${l}</button>`).join('')}</div>${body}</div>`;
 }
 async function adminTicketView(){
   const d=await api('admin/tickets/'+S.ticket);const t=d.ticket;refreshMe();
@@ -614,7 +656,7 @@ function reelHTML(r){
       <button data-act="comments" aria-label="Комментарии">${I.chat}<span>${num(r.commentCount)}</span></button>
       <button data-act="share" aria-label="Скопировать ссылку">${I.send}</button>
       <button class="save" data-act="save" aria-label="Сохранить" aria-pressed="${r.saved}">${I.save}</button>
-      ${r.canDelete?`<button data-act="postmenu" aria-label="Ещё">${I.more}</button>`:''}
+      <button data-act="postmenu" aria-label="Ещё">${I.more}</button>
     </div>
     <div class="rinfo"><div class="rwho"><button class="who" data-act="user" data-h="${esc(a.handle)}"><img class="av" src="${avOf(a)}" alt=""><b>${hnd(a)}</b></button></div>
       ${r.cap?`<p class="rcap">${rich(r.cap)}</p>`:''}</div>
@@ -679,9 +721,33 @@ async function openPost(id){
   const o=sheet('Публикация',loading());o.querySelector('.sheet').style.maxHeight='94%';
   try{const d=await api('posts/'+id);posts[id]=d.post;o.querySelector('.body').innerHTML=postHTML({...d.post,comments:d.post.comments.slice(-2)});}catch(e){o.querySelector('.body').innerHTML=errBox(e.message);}
 }
-function postMenu(id){
-  const o=sheet('Публикация',`<div class="menu"><button class="danger" data-act="askdelete" data-id="${id}">Удалить публикацию</button><button data-act="close">Отмена</button></div>`);
+function tgCard(){
+  const t=ME.tg||{};
+  if(!t.available)return ME.role==='admin'?`<div class="card"><h3>Уведомления в Telegram</h3><p>Бот ещё не подключён к серверу. Выполните на сервере в Termius:</p><div class="secret" style="font-size:13px">bash /root/Emerald-brawl-kadr/deploy/set-telegram-token.sh</div></div>`:'';
+  if(!t.linked)return `<div class="card"><h3>Уведомления в Telegram</h3><p>Узнавайте о лайках, комментариях, подписчиках и ответах поддержки сразу в Telegram${t.bot?' через @'+esc(t.bot):''}.</p><button class="btn pri" style="min-height:44px" data-act="tglink">Подключить Telegram</button></div>`;
+  return `<div class="card"><h3>Уведомления в Telegram</h3><p>Подключено${t.bot?' через @'+esc(t.bot):''}.</p>
+    <label style="display:flex;gap:10px;align-items:center;font-weight:700"><input type="checkbox" data-act="tgnotify" ${t.notify?'checked':''} style="width:20px;height:20px;accent-color:var(--accent)"> Присылать уведомления</label>
+    <button class="btn danger" data-act="tgunlink">Отключить Telegram</button></div>`;
 }
+function postMenu(id){
+  const p=posts[id];const mine=p&&p.author.id===ME.id;
+  sheet(p&&p.type==='reel'?'Рилс':'Публикация',`<div class="menu">
+    ${mine?'':`<button class="danger" data-act="report" data-id="${id}">Пожаловаться</button>`}
+    ${p&&p.canDelete?`<button class="danger" data-act="askdelete" data-id="${id}">Удалить${mine?'':' (как админ)'}</button>`:''}
+    <button data-act="copylink" data-id="${id}">Скопировать ссылку</button>
+    <button data-act="close">Отмена</button></div>`);
+}
+const REASONS=[['spam','Спам или реклама'],['abuse','Оскорбления или травля'],['nsfw','Материалы 18+'],['violence','Насилие или опасные действия'],['fake','Обман или фейк'],['other','Другое']];
+function reportSheet(id){
+  const o=sheet('Пожаловаться',`<form class="form" id="repf"><p style="margin:0;color:var(--muted);font-size:14px">Что не так с публикацией? Автор не узнает, кто пожаловался.</p>
+    <div class="reasons">${REASONS.map(([k,l],i)=>`<label><input type="radio" name="rr" value="${k}" ${i?'':'required'}> ${l}</label>`).join('')}</div>
+    <textarea id="rtext" rows="2" maxlength="500" placeholder="Подробности (необязательно)"></textarea><p class="err" id="r-err" hidden></p>
+    <button class="btn pri" style="min-height:44px">Отправить жалобу</button></form>`);
+  o.querySelector('#repf').addEventListener('submit',async e=>{e.preventDefault();const r=o.querySelector('input[name=rr]:checked');
+    try{await api('posts/'+id+'/report',{body:{reason:r.value,text:o.querySelector('#rtext').value}});closeOv();toast('Жалоба отправлена. Спасибо, модераторы проверят');}
+    catch(x){const er=o.querySelector('#r-err');er.textContent=x.message;er.hidden=false;}});
+}
+async function copyText(t,okMsg){try{await navigator.clipboard.writeText(t);toast(okMsg||'Скопировано');}catch(x){toast('Не удалось скопировать: выделите текст вручную');}}
 
 /* ---------- toast ---------- */
 let tt;function toast(m){let t=$('.toast');if(!t){t=document.createElement('div');t.className='toast';t.setAttribute('role','status');document.body.appendChild(t);}t.textContent=m;t.hidden=false;clearTimeout(tt);tt=setTimeout(()=>t.hidden=true,3000);}
@@ -781,6 +847,19 @@ document.addEventListener('click',async e=>{
     case 'dodelete':await api('posts/'+a.dataset.id,{method:'DELETE'});closeOv();toast('Публикация удалена');render(true);break;
     case 'delcomment':{const d=await api('posts/'+a.dataset.pid+'/comments/'+a.dataset.cid,{method:'DELETE'});const ov=$('.ov');ov?._paint?.(d.post);updatePost(d.post);break;}
     case 'follow':{const h=a.dataset.h;const d=await api('users/'+encodeURIComponent(h)+'/follow',{body:{}});toast(d.user.isFollowing?'Вы подписались на '+h:'Подписка отменена');render(true);break;}
+    case 'report':reportSheet(a.dataset.id);break;
+    case 'copylink':closeOv();copyText(location.origin+location.pathname+'?p='+a.dataset.id,'Ссылка на публикацию скопирована');break;
+    case 'repact':{const row=a.closest('[data-pid]');const act2=a.dataset.a;
+      if(act2!=='dismiss'&&!a.dataset.sure){a.dataset.sure='1';a.textContent='Точно? Нажмите ещё раз';break;}
+      await api('admin/reports/'+row.dataset.pid,{body:{action:act2}});toast(act2==='dismiss'?'Жалобы отклонены':act2==='ban'?'Пост удалён, автор заблокирован':'Пост удалён');refreshMe();render(true);break;}
+    case 'copyinvite':copyText(inviteURL(),'Ссылка-приглашение скопирована');break;
+    case 'shareinvite':{const url=inviteURL(),text='Я в Кадре — соцсети для фото и рилсов. Присоединяйся!';
+      if(navigator.share){try{await navigator.share({title:'Кадр',text,url});}catch(x){}}else copyText(text+' '+url,'Приглашение скопировано, отправьте его другу');break;}
+    case 'tglink':{const d=await api('me/telegram',{body:{}});
+      const w=window.Telegram?.WebApp;if(w&&w.openTelegramLink)w.openTelegramLink(d.url);else location.href=d.url;
+      toast('Нажмите «Старт» в боте, потом вернитесь сюда');let n=0;const iv=setInterval(async()=>{n++;await refreshMe();if(ME.tg&&ME.tg.linked){clearInterval(iv);toast('Telegram подключён!');if(S.sub==='settings')render(true);}if(n>60)clearInterval(iv);},3000);break;}
+    case 'tgunlink':{const d=await api('me/telegram',{method:'DELETE'});ME=d.me;toast('Telegram отключён');render(true);break;}
+    case 'tgnotify':{const d=await api('me',{method:'PATCH',body:{tgNotify:a.checked}});ME=d.me;toast(a.checked?'Уведомления включены':'Уведомления выключены');break;}
     case 'hideios':iosHintHidden=true;try{localStorage.setItem('kadr-ios-hint','1');}catch(x){}$('#ioshint')?.remove();break;
     case 'pick':$('#file').click();break;
     case 'textpost':S.draft={text:true,cap:''};render();break;
@@ -818,7 +897,7 @@ $('#avfile').addEventListener('change',async e=>{const f=e.target.files[0];e.tar
   catch(x){toast(x.message||'Не получилось загрузить фото');}});
 
 /* ---------- live badges ---------- */
-async function refreshMe(){try{const d=await api('me');const before=(ME.supportUnread||0)+'/'+(ME.adminOpen||0);ME=d.me;if(before!==(ME.supportUnread||0)+'/'+(ME.adminOpen||0)){tabsHTML();if(ME.supportUnread&&!S.sub)toast('Поддержка ответила на ваше обращение');}}catch(e){}}
+async function refreshMe(){try{const d=await api('me');const k=m=>(m.supportUnread||0)+'/'+(m.adminOpen||0)+'/'+(m.adminReports||0);const before=k(ME);ME=d.me;if(before!==k(ME)){tabsHTML();if(ME.supportUnread&&!S.sub)toast('Поддержка ответила на ваше обращение');}}catch(e){}}
 setInterval(()=>{if(!ME||document.hidden)return;refreshMe();if(S.sub==='ticket'||S.sub==='aticket'){const ta=$('#r-text');if(!ta||!ta.value)render(true).then(()=>{if($('#chat'))scrollChat();});}},15000);
 
 /* ---------- Android app back button ---------- */
@@ -834,7 +913,16 @@ window.kadrBack=()=>{
 
 /* ---------- boot ---------- */
 try{const t=localStorage.getItem('kadr-theme');if(t)document.documentElement.dataset.theme=t;}catch(e){}
-(async()=>{try{const d=await api('me',{auth:true});ME=d.me;render();}catch(e){if(/Нет связи/.test(e.message))$('#app').innerHTML=errBox(e.message);else showAuth();}})();
+function applyDeepLink(){
+  const q=DEEP;DEEP=null;if(!q)return false;
+  if(q.get('support')){S.sub=q.get('support').startsWith('t')?'ticket':'support';S.ticket=q.get('support');return true;}
+  if(q.get('admin')&&ME.role==='admin'){S.sub='admin';S.adminTab=q.get('admin')==='reports'?'reports':'tickets';S.tstatus='open';return true;}
+  if(q.get('u')){const h=q.get('u');if(h===ME.handle){S.tab='me';}else S.user=h;return true;}
+  if(q.get('p')){const id=q.get('p'),c=q.get('c');setTimeout(()=>c?openComments(id):openPost(id),300);return false;}
+  return false;
+}
+window.addEventListener('load',()=>{try{const w=window.Telegram?.WebApp;if(w&&w.initData!==undefined){w.ready();w.expand();}}catch(e){}});
+(async()=>{try{const d=await api('me',{auth:true});ME=d.me;applyDeepLink();render();}catch(e){if(/Нет связи/.test(e.message))$('#app').innerHTML=errBox(e.message);else{if(REF)S.auth='register';showAuth();}}})();
 })();
 </script>
 </body>

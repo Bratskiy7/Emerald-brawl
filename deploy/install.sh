@@ -6,13 +6,26 @@ set -euo pipefail
 
 SRC="$(cd "$(dirname "$0")/.." && pwd)"
 APP=/opt/kadr
-DOMAIN="${KADR_DOMAIN:-kadr.193-247-73-123.sslip.io}"
+# Домен запоминается в /opt/kadr/domain. Сменить: KADR_DOMAIN=ваш-домен.ru bash install.sh
+SAVED_DOMAIN="$(cat /opt/kadr/domain 2>/dev/null || true)"
+DOMAIN="${KADR_DOMAIN:-${SAVED_DOMAIN:-kadr.193-247-73-123.sslip.io}}"
+DOMAIN="${DOMAIN#https://}"; DOMAIN="${DOMAIN#http://}"; DOMAIN="${DOMAIN%%/*}"
 OLD_PORT="$(sed -n 's/^Environment=PORT=//p' /etc/systemd/system/kadr.service 2>/dev/null || true)"
 PORT="${KADR_PORT:-${OLD_PORT:-3200}}"
 
 command -v node >/dev/null || { echo "Нет Node.js. Он должен быть уже установлен для S-Message."; exit 1; }
 
 mkdir -p "$APP/data" "$APP/backups"
+if [ "$DOMAIN" != "kadr.193-247-73-123.sslip.io" ]; then
+  IP="$(curl -s --max-time 10 https://api.ipify.org || true)"
+  RESOLVED="$(getent ahostsv4 "$DOMAIN" | awk '{print $1; exit}' || true)"
+  if [ -z "$RESOLVED" ] || { [ -n "$IP" ] && [ "$RESOLVED" != "$IP" ]; }; then
+    echo "!! Домен $DOMAIN пока не указывает на этот сервер (${RESOLVED:-не найден}, а сервер ${IP:-?})."
+    echo "   Добавьте у регистратора A-запись: $DOMAIN → ${IP:-IP сервера}. Обычно она начинает работать за 15–60 минут."
+    exit 1
+  fi
+fi
+echo "$DOMAIN" > "$APP/domain"
 if [ -f "$APP/data/data.json" ]; then
   cp "$APP/data/data.json" "$APP/backups/data-$(date +%Y%m%d-%H%M%S).json"
   ls -1t "$APP/backups"/data-*.json | tail -n +31 | xargs -r rm --
@@ -30,6 +43,7 @@ WorkingDirectory=$APP
 Environment=PORT=$PORT
 Environment=HOST=127.0.0.1
 Environment=KADR_DATA=$APP/data
+Environment=KADR_URL=https://$DOMAIN/
 ExecStart=$(command -v node) $APP/server.js
 Restart=always
 RestartSec=2
@@ -41,7 +55,8 @@ systemctl daemon-reload
 systemctl enable kadr >/dev/null 2>&1
 systemctl restart kadr
 
-if [ -d /etc/nginx/sites-available ]; then CONF=/etc/nginx/sites-available/kadr; LINK=/etc/nginx/sites-enabled/kadr; else CONF=/etc/nginx/conf.d/kadr.conf; LINK=""; fi
+NAME=kadr; [ "$DOMAIN" = "kadr.193-247-73-123.sslip.io" ] || NAME="kadr-$DOMAIN"
+if [ -d /etc/nginx/sites-available ]; then CONF=/etc/nginx/sites-available/$NAME; LINK=/etc/nginx/sites-enabled/$NAME; else CONF=/etc/nginx/conf.d/$NAME.conf; LINK=""; fi
 if [ ! -f "$CONF" ]; then
   cat > "$CONF" <<EOF
 server {

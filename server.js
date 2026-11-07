@@ -2,6 +2,7 @@
 // Кадр — фото-соцсеть. Сервер без npm-зависимостей (Node 18+).
 // Хранилище: data/data.json, медиа: data/uploads/. Порт: PORT (по умолчанию 3200).
 const http = require('http');
+const https = require('https');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
@@ -18,8 +19,9 @@ const MAX_JSON = 1024 * 1024;
 fs.mkdirSync(UP, { recursive: true });
 
 /* ---------------- storage ---------------- */
-let db = { users: {}, sessions: {}, posts: {}, tickets: {} };
+let db = { users: {}, sessions: {}, posts: {}, tickets: {}, reports: {}, tgLinks: {}, tgOffset: 0, seq: 0 };
 if (fs.existsSync(DB_FILE)) db = Object.assign(db, JSON.parse(fs.readFileSync(DB_FILE, 'utf8')));
+db.reports = db.reports || {}; db.tgLinks = db.tgLinks || {}; db.seq = db.seq || 0;
 let saveTimer = null;
 function save() { clearTimeout(saveTimer); saveTimer = setTimeout(flush, 300); }
 function flush() {
@@ -62,6 +64,85 @@ if (!official()) {
   }
 }
 
+/* registration numbers */
+for (const u of Object.values(db.users).filter(u => !u.official && !u.num).sort((a, b) => a.createdAt - b.createdAt)) u.num = ++db.seq;
+
+/* ---------------- telegram bot ---------------- */
+const TG_FILE = path.join(DIR, 'telegram.json');
+let TG = { token: null, username: null };
+function loadTg() { try { TG = JSON.parse(fs.readFileSync(TG_FILE, 'utf8')); } catch { TG = { token: null, username: null }; } }
+loadTg();
+fs.watchFile(TG_FILE, { interval: 5000 }, loadTg);
+let BASE = process.env.KADR_URL ? process.env.KADR_URL.replace(/\/?$/, '/') : '';
+const htmlEsc = s => String(s ?? '').replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+function tgCall(method, body, timeoutMs = 15000) {
+  return new Promise(resolve => {
+    if (!TG.token) return resolve(null);
+    const data = JSON.stringify(body);
+    const req = https.request({ hostname: 'api.telegram.org', path: `/bot${TG.token}/${method}`, method: 'POST', timeout: timeoutMs,
+      headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(data) } }, res => {
+      let b = ''; res.on('data', c => b += c); res.on('end', () => { try { resolve(JSON.parse(b)); } catch { resolve(null); } });
+    });
+    req.on('error', () => resolve(null));
+    req.on('timeout', () => { req.destroy(); resolve(null); });
+    req.end(data);
+  });
+}
+const openBtn = (text, pathQ) => BASE ? { inline_keyboard: [[{ text, web_app: { url: BASE + (pathQ || '') } }]] } : undefined;
+function notify(userId, text, pathQ, btn = 'Открыть') {
+  const u = db.users[userId];
+  if (!u || u.banned || !u.tg || u.tg.notify === false) return;
+  tgCall('sendMessage', { chat_id: u.tg.chatId, text, parse_mode: 'HTML', disable_web_page_preview: true, reply_markup: openBtn(btn, pathQ) })
+    .then(r => { if (r && r.ok === false && r.error_code === 403) { u.tg = null; save(); } });
+}
+function notifyAdmins(text, pathQ) { for (const u of Object.values(db.users)) if (u.role === 'admin') notify(u.id, text, pathQ, 'Открыть админ-панель'); }
+const at = u => '@' + htmlEsc(u.handle);
+async function handleTgUpdate(upd) {
+  const m = upd.message; if (!m || !m.text || m.chat.type !== 'private') return;
+  const chatId = m.chat.id, text = m.text.trim();
+  if (text.startsWith('/start')) {
+    const code = text.split(/\s+/)[1] || '';
+    const link = db.tgLinks[code];
+    if (link && link.exp > Date.now() && db.users[link.userId]) {
+      for (const x of Object.values(db.users)) if (x.tg && x.tg.chatId === chatId && x.id !== link.userId) x.tg = null;
+      const u = db.users[link.userId]; u.tg = { chatId, notify: true }; delete db.tgLinks[code]; save();
+      return tgCall('sendMessage', { chat_id: chatId, parse_mode: 'HTML', reply_markup: openBtn('Открыть Кадр'),
+        text: `Готово! Telegram подключён к ${at(u)}.\nБуду присылать уведомления о лайках, комментариях, подписках и ответах поддержки.\n\nОтключить: /stop` });
+    }
+    return tgCall('sendMessage', { chat_id: chatId, parse_mode: 'HTML', reply_markup: openBtn('Открыть Кадр'),
+      text: '<b>Кадр</b> — соцсеть для фото и рилсов 📸\n\nНажмите кнопку ниже, чтобы открыть Кадр прямо в Telegram.\n\nЧтобы получать уведомления, откройте Кадр → Профиль → шестерёнка → «Подключить Telegram».' });
+  }
+  if (text === '/stop') {
+    let n = 0; for (const x of Object.values(db.users)) if (x.tg && x.tg.chatId === chatId) { x.tg.notify = false; n++; }
+    save();
+    return tgCall('sendMessage', { chat_id: chatId, text: n ? 'Уведомления выключены. Включить снова можно в настройках Кадра.' : 'Этот Telegram не подключён ни к одному аккаунту Кадра.' });
+  }
+}
+(async function pollTelegram() {
+  for (;;) {
+    if (!TG.token) { await new Promise(r => setTimeout(r, 10000)); continue; }
+    const r = await tgCall('getUpdates', { offset: db.tgOffset || 0, timeout: 50, allowed_updates: ['message'] }, 65000);
+    if (!r || !r.ok) { await new Promise(r2 => setTimeout(r2, 5000)); continue; }
+    for (const upd of r.result) { db.tgOffset = upd.update_id + 1; try { await handleTgUpdate(upd); } catch (e) { console.error(e); } }
+    if (r.result.length) save();
+  }
+})();
+
+const notified = new Set(); // like/follow notifications already sent since start (no spam on re-like)
+
+/* ---------------- invites & badges ---------------- */
+const INVITES_FOR_BADGE = 3;
+function inviteStats(u) {
+  const inv = Object.values(db.users).filter(x => x.invitedBy === u.id && !x.banned);
+  const active = inv.filter(x => Object.values(db.posts).some(p => p.userId === x.id)).length;
+  return { total: inv.length, active, need: INVITES_FOR_BADGE };
+}
+function badgesOf(u) {
+  const b = [];
+  if (!u.official && inviteStats(u).active >= INVITES_FOR_BADGE) b.push('ambassador');
+  return b;
+}
+
 /* ---------------- helpers ---------------- */
 const HANDLE_RE = /^[a-z0-9._]{3,24}$/;
 const RESERVED = new Set(['kadr', 'admin', 'support', 'root', 'api', 'uploads', 'moderator', 'podderzhka']);
@@ -75,7 +156,7 @@ function lite(u) {
 }
 function pubUser(u, me) {
   return {
-    ...lite(u), bio: u.bio || '', followers: followersOf(u), following: u.follows.length,
+    ...lite(u), bio: u.bio || '', followers: followersOf(u), following: u.follows.length, badges: badgesOf(u),
     posts: Object.values(db.posts).filter(p => p.userId === u.id).length,
     isFollowing: !!me && me.follows.includes(u.id), isMe: !!me && me.id === u.id
   };
@@ -93,8 +174,13 @@ function pubPost(p, me, full) {
 }
 function meView(u) {
   const t = Object.values(db.tickets).filter(t => t.userId === u.id && t.unreadUser).length;
-  const out = { ...pubUser(u, u), role: u.role || 'user', supportUnread: t };
-  if (u.role === 'admin') out.adminOpen = Object.values(db.tickets).filter(t => t.status === 'open').length;
+  const out = { ...pubUser(u, u), role: u.role || 'user', supportUnread: t,
+    tg: { available: !!TG.token, bot: TG.username || null, linked: !!u.tg, notify: !!(u.tg && u.tg.notify !== false) },
+    invite: { ...inviteStats(u), path: '?ref=' + u.handle } };
+  if (u.role === 'admin') {
+    out.adminOpen = Object.values(db.tickets).filter(t => t.status === 'open').length;
+    out.adminReports = new Set(Object.values(db.reports).filter(r => r.status === 'open' && db.posts[r.postId]).map(r => r.postId)).size;
+  }
   return out;
 }
 function ticketView(t, forStaff) {
@@ -206,8 +292,15 @@ route('POST', '/api/register', null, async (req, res) => {
   need(name.length >= 1, 400, 'Укажите имя');
   need(pw.length >= 6 && pw.length <= 200, 400, 'Пароль должен быть не короче 6 символов');
   const off = official();
-  const u = { id: newId('u'), handle, name, bio: '', avatar: null, role: 'user', verified: false, follows: off ? [off.id] : [], saved: [], createdAt: Date.now(), ...hashPw(pw) };
+  const inviter = b.ref ? byHandle(String(b.ref).replace(/^@/, '')) : null;
+  const u = { id: newId('u'), handle, name, bio: '', avatar: null, role: 'user', verified: false, follows: off ? [off.id] : [], saved: [], createdAt: Date.now(),
+    num: ++db.seq, invitedBy: inviter && !inviter.banned ? inviter.id : undefined, ...hashPw(pw) };
+  if (inviter && !inviter.banned && !inviter.official) u.follows.push(inviter.id);
   db.users[u.id] = u; save();
+  if (u.invitedBy) {
+    const s = inviteStats(inviter);
+    notify(inviter.id, `🎉 По вашей ссылке зарегистрировался ${at(u)}!\nКогда друг опубликует первый пост, он засчитается в «Амбассадора»: сейчас ${s.active} из ${s.need}.`, '?u=' + u.handle);
+  }
   send(res, 200, { me: meView(u) }, { 'Set-Cookie': startSession(req, res, u) });
 });
 route('POST', '/api/login', null, async (req, res) => {
@@ -227,6 +320,7 @@ route('PATCH', '/api/me', 'user', async (req, res, me) => {
   const b = await readJson(req);
   if (b.name !== undefined) { const n = clean(b.name, 40); need(n, 400, 'Имя не может быть пустым'); me.name = n; }
   if (b.bio !== undefined) me.bio = clean(b.bio, 300);
+  if (b.tgNotify !== undefined && me.tg) me.tg.notify = !!b.tgNotify;
   if (b.avatar !== undefined) { need(b.avatar === null || (mediaOk(b.avatar) && !/\.(mp4|webm|mov)$/.test(b.avatar)), 400, 'Неверное фото профиля'); me.avatar = b.avatar; }
   if (b.handle !== undefined && b.handle !== me.handle) {
     need(!me.official, 400, 'Имя официального аккаунта менять нельзя');
@@ -248,6 +342,17 @@ route('POST', '/api/me/password', 'user', async (req, res, me) => {
   save(); send(res, 200, { ok: true });
 });
 route('POST', '/api/upload', 'user', async (req, res, me) => handleUpload(req, res, me));
+route('POST', '/api/me/telegram', 'user', async (req, res, me) => {
+  need(TG.token && TG.username, 503, 'Telegram-бот ещё не подключён к серверу. Напишите в поддержку');
+  for (const [c, l] of Object.entries(db.tgLinks)) if (l.exp < Date.now() || l.userId === me.id) delete db.tgLinks[c];
+  const code = crypto.randomBytes(12).toString('hex');
+  db.tgLinks[code] = { userId: me.id, exp: Date.now() + 15 * 60e3 }; save();
+  send(res, 200, { url: `https://t.me/${TG.username}?start=${code}` });
+});
+route('DELETE', '/api/me/telegram', 'user', async (req, res, me) => {
+  if (me.tg) tgCall('sendMessage', { chat_id: me.tg.chatId, text: 'Telegram отключён от аккаунта Кадра. Уведомлений больше не будет.' });
+  me.tg = null; save(); send(res, 200, { me: meView(me) });
+});
 
 route('GET', '/api/feed', 'user', async (req, res, me) => {
   const ids = new Set([me.id, ...me.follows]);
@@ -287,6 +392,10 @@ route('POST', '/api/users/:handle/follow', 'user', async (req, res, me, h) => {
   const u = byHandle(decodeURIComponent(h)); need(u && !u.banned && u.id !== me.id, 404, 'Пользователь не найден');
   const i = me.follows.indexOf(u.id); if (i >= 0) me.follows.splice(i, 1); else me.follows.push(u.id);
   save(); send(res, 200, { user: pubUser(u, me) });
+  if (i < 0) {
+    const key = me.id + '>' + u.id;
+    if (!notified.has(key)) { notified.add(key); notify(u.id, `👤 ${at(me)} подписался(-ась) на вас`, '?u=' + me.handle); }
+  }
 });
 
 route('POST', '/api/posts', 'user', async (req, res, me) => {
@@ -313,6 +422,10 @@ route('POST', '/api/posts/:id/like', 'user', async (req, res, me, id) => {
   if (b.on === true && i < 0) p.likes.push(me.id); else if (b.on === false && i >= 0) p.likes.splice(i, 1);
   else if (b.on === undefined) { if (i >= 0) p.likes.splice(i, 1); else p.likes.push(me.id); }
   save(); send(res, 200, { post: pubPost(p, me) });
+  if (i < 0 && p.likes.includes(me.id) && p.userId !== me.id) {
+    const key = me.id + '♥' + p.id;
+    if (!notified.has(key)) { notified.add(key); notify(p.userId, `❤️ ${at(me)} оценил(-а) ваш ${p.type === 'reel' ? 'рилс' : 'пост'}${p.cap ? ': «' + htmlEsc(p.cap.slice(0, 60)) + (p.cap.length > 60 ? '…' : '') + '»' : ''}`, '?p=' + p.id); }
+  }
 });
 route('POST', '/api/posts/:id/save', 'user', async (req, res, me, id) => {
   findPost(id); const i = me.saved.indexOf(id); if (i >= 0) me.saved.splice(i, 1); else me.saved.push(id);
@@ -323,6 +436,25 @@ route('POST', '/api/posts/:id/comments', 'user', async (req, res, me, id) => {
   const p = findPost(id); const b = await readJson(req); const text = clean(b.text, 1000); need(text, 400, 'Комментарий пустой');
   p.comments.push({ id: newId('c'), userId: me.id, text, ts: Date.now() }); save();
   send(res, 200, { post: pubPost(p, me, true) });
+  const short = htmlEsc(text.slice(0, 200)) + (text.length > 200 ? '…' : '');
+  if (p.userId !== me.id) notify(p.userId, `💬 ${at(me)} прокомментировал(-а) ваш ${p.type === 'reel' ? 'рилс' : 'пост'}:\n${short}`, '?p=' + p.id + '&c=1');
+  const mentioned = new Set((text.match(/@([a-z0-9._]{3,24})/g) || []).map(h => h.slice(1)));
+  for (const h of mentioned) { const u = byHandle(h); if (u && u.id !== me.id && u.id !== p.userId) notify(u.id, `📣 ${at(me)} упомянул(-а) вас в комментарии:\n${short}`, '?p=' + p.id + '&c=1'); }
+});
+
+/* reports */
+const REASONS = { spam: 'Спам или реклама', abuse: 'Оскорбления или травля', nsfw: 'Материалы 18+', violence: 'Насилие или опасные действия', fake: 'Обман или фейк', other: 'Другое' };
+route('POST', '/api/posts/:id/report', 'user', async (req, res, me, id) => {
+  const p = findPost(id); need(p.userId !== me.id, 400, 'Нельзя пожаловаться на свою публикацию');
+  need(!limited(req, 'rep:' + me.id, 20, 3600e3), 429, 'Слишком много жалоб. Подождите немного');
+  const b = await readJson(req); need(REASONS[b.reason], 400, 'Выберите причину');
+  const exists = Object.values(db.reports).find(r => r.postId === p.id && r.userId === me.id && r.status === 'open');
+  if (!exists) {
+    const r = { id: newId('r'), postId: p.id, userId: me.id, reason: b.reason, text: clean(b.text, 500), ts: Date.now(), status: 'open' };
+    db.reports[r.id] = r; save();
+    notifyAdmins(`🚩 Жалоба на ${p.type === 'reel' ? 'рилс' : 'пост'} ${at(db.users[p.userId])}: ${REASONS[b.reason]}`, '?admin=reports');
+  }
+  send(res, 200, { ok: true });
 });
 route('DELETE', '/api/posts/:id/comments/:cid', 'user', async (req, res, me, id, cid) => {
   const p = findPost(id); const i = p.comments.findIndex(c => c.id === cid); need(i >= 0, 404, 'Комментарий не найден');
@@ -347,6 +479,7 @@ route('POST', '/api/support', 'user', async (req, res, me) => {
   const t = { id: newId('t'), userId: me.id, kind, subject: kind === 'verify' ? 'Заявка на галочку' : clean(text.split('\n')[0], 80), status: 'open',
     createdAt: now, updatedAt: now, unreadStaff: true, unreadUser: false, messages: [{ from: 'user', text, ts: now }] };
   db.tickets[t.id] = t; save(); send(res, 200, { ticket: ticketView(t, false) });
+  notifyAdmins(`${kind === 'verify' ? '✅ Заявка на галочку' : '🛟 Новое обращение'} от ${at(me)}:\n${htmlEsc(text.slice(0, 300))}`, '?admin=tickets');
 });
 route('GET', '/api/support/:id', 'user', async (req, res, me, id) => {
   const t = db.tickets[id]; need(t && t.userId === me.id, 404, 'Обращение не найдено');
@@ -359,6 +492,7 @@ route('POST', '/api/support/:id', 'user', async (req, res, me, id) => {
   const b = await readJson(req); const text = clean(b.text, 2000); need(text, 400, 'Сообщение пустое');
   t.messages.push({ from: 'user', text, ts: Date.now() }); t.status = 'open'; t.unreadStaff = true; t.updatedAt = Date.now();
   save(); send(res, 200, { ticket: ticketView(t, false) });
+  notifyAdmins(`🛟 ${at(me)} ответил(-а) в обращении «${htmlEsc(t.subject)}»:\n${htmlEsc(text.slice(0, 300))}`, '?admin=tickets');
 });
 
 /* admin */
@@ -366,7 +500,9 @@ route('GET', '/api/admin/stats', 'admin', async (req, res) => {
   const day = Date.now() - 864e5; const posts = Object.values(db.posts); const users = Object.values(db.users); const tk = Object.values(db.tickets);
   send(res, 200, { users: users.length, newUsers: users.filter(u => u.createdAt > day).length, verified: users.filter(u => u.verified).length, banned: users.filter(u => u.banned).length,
     posts: posts.filter(p => p.type !== 'reel').length, reels: posts.filter(p => p.type === 'reel').length, newPosts: posts.filter(p => p.ts > day).length,
-    ticketsOpen: tk.filter(t => t.status === 'open').length, ticketsAll: tk.length });
+    ticketsOpen: tk.filter(t => t.status === 'open').length, ticketsAll: tk.length,
+    reportsOpen: new Set(Object.values(db.reports).filter(r => r.status === 'open' && db.posts[r.postId]).map(r => r.postId)).size,
+    telegramLinked: users.filter(u => u.tg).length, invited: users.filter(u => u.invitedBy).length });
 });
 route('GET', '/api/admin/users', 'admin', async (req, res) => {
   const q = clean(new URL(req.url, 'http://x').searchParams.get('q'), 60).toLowerCase().replace(/^@/, '');
@@ -399,6 +535,7 @@ route('POST', '/api/admin/tickets/:id/reply', 'admin', async (req, res, me, id) 
   const t = db.tickets[id]; need(t, 404, 'Обращение не найдено'); const b = await readJson(req); const text = clean(b.text, 4000); need(text, 400, 'Ответ пустой');
   t.messages.push({ from: 'staff', staffId: me.id, text, ts: Date.now() }); t.status = b.close ? 'closed' : 'answered'; t.unreadUser = true; t.unreadStaff = false; t.updatedAt = Date.now();
   save(); send(res, 200, { ticket: ticketView(t, true) });
+  notify(t.userId, `🛟 Поддержка Кадра ответила:\n${htmlEsc(text.slice(0, 500))}`, '?support=' + t.id, 'Открыть чат');
 });
 route('POST', '/api/admin/tickets/:id/status', 'admin', async (req, res, me, id) => {
   const t = db.tickets[id]; need(t, 404, 'Обращение не найдено'); const b = await readJson(req);
@@ -411,11 +548,36 @@ route('POST', '/api/admin/tickets/:id/verify', 'admin', async (req, res, me, id)
   t.messages.push({ from: 'staff', staffId: me.id, ts: Date.now(), text: grant ? 'Готово: вам выдана синяя галочка. Она уже видна рядом с вашим именем.' : 'Заявку на галочку пока отклонили. Добавьте фото профиля, описание и несколько публикаций, потом подайте заявку снова.' });
   t.status = 'closed'; t.unreadUser = true; t.unreadStaff = false; t.updatedAt = Date.now();
   save(); send(res, 200, { ticket: ticketView(t, true) });
+  notify(u.id, grant ? '✅ Поздравляем! Вам выдана синяя галочка.' : 'Заявку на галочку пока отклонили. Подробности в поддержке.', '?support=' + t.id, 'Открыть');
+});
+route('GET', '/api/admin/reports', 'admin', async (req, res, me) => {
+  const groups = {};
+  for (const r of Object.values(db.reports)) {
+    if (r.status !== 'open') continue; const p = db.posts[r.postId]; if (!p || !db.users[p.userId]) continue;
+    const g = groups[r.postId] ??= { post: pubPost(p, me), author: { ...lite(db.users[p.userId]), banned: !!db.users[p.userId].banned }, reports: [], last: 0 };
+    g.reports.push({ reason: REASONS[r.reason], text: r.text, ts: r.ts, by: db.users[r.userId] ? lite(db.users[r.userId]) : null }); g.last = Math.max(g.last, r.ts);
+  }
+  send(res, 200, { items: Object.values(groups).sort((a, b) => b.reports.length - a.reports.length || b.last - a.last) });
+});
+route('POST', '/api/admin/reports/:postId', 'admin', async (req, res, me, postId) => {
+  const b = await readJson(req); need(['dismiss', 'delete', 'ban'].includes(b.action), 400, 'Неизвестное действие');
+  const p = db.posts[postId];
+  for (const r of Object.values(db.reports)) if (r.postId === postId && r.status === 'open') { r.status = b.action === 'dismiss' ? 'dismissed' : 'resolved'; r.resolvedBy = me.id; }
+  if (p && (b.action === 'delete' || b.action === 'ban')) {
+    const author = db.users[p.userId];
+    delete db.posts[postId];
+    if (author) notify(author.id, `Ваша публикация удалена модератором за нарушение правил Кадра.${b.action === 'ban' ? ' Аккаунт заблокирован.' : ''}`);
+    if (b.action === 'ban' && author && !author.official && author.role !== 'admin') {
+      author.banned = true; for (const [s, v] of Object.entries(db.sessions)) if (v.userId === author.id) delete db.sessions[s];
+    }
+  }
+  save(); send(res, 200, { ok: true });
 });
 
 /* ---------------- server ---------------- */
 const server = http.createServer(async (req, res) => {
   const url = req.url.split('?')[0];
+  if (!BASE && req.headers['x-forwarded-proto'] === 'https') BASE = 'https://' + (req.headers['x-forwarded-host'] || req.headers.host) + '/';
   try {
     if (url.startsWith('/api/')) {
       for (const r of routes) {
