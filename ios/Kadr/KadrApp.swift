@@ -17,7 +17,8 @@ struct WebScreen: UIViewControllerRepresentable {
 }
 
 final class WebViewController: UIViewController, WKNavigationDelegate, WKUIDelegate {
-    private let home = URL(string: "https://kadr.193-247-73-123.sslip.io/")!
+    private let home = URL(string: "https://getkadr.space/")!
+    private let oldHost = "kadr.193-247-73-123.sslip.io"
     private var web: WKWebView!
     private let offline = UIStackView()
 
@@ -34,7 +35,7 @@ final class WebViewController: UIViewController, WKNavigationDelegate, WKUIDeleg
         let config = WKWebViewConfiguration()
         config.allowsInlineMediaPlayback = true
         config.mediaTypesRequiringUserActionForPlayback = []
-        config.applicationNameForUserAgent = "Mobile/15E148 KadrApp/1"
+        config.applicationNameForUserAgent = "Mobile/15E148 KadrApp/2"
         config.websiteDataStore = .default()
 
         web = WKWebView(frame: .zero, configuration: config)
@@ -108,7 +109,7 @@ final class WebViewController: UIViewController, WKNavigationDelegate, WKUIDeleg
     // Links to other sites open in Safari.
     func webView(_ webView: WKWebView, decidePolicyFor action: WKNavigationAction,
                  decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
-        if let url = action.request.url, let host = url.host, host != home.host,
+        if let url = action.request.url, let host = url.host, host != home.host, host != oldHost,
            action.targetFrame?.isMainFrame ?? true {
             UIApplication.shared.open(url)
             decisionHandler(.cancel)

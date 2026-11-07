@@ -27,6 +27,7 @@
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="https" android:host="getkadr.space" />
                 <data android:scheme="https" android:host="kadr.193-247-73-123.sslip.io" />
             </intent-filter>
         </activity>

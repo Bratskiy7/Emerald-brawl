@@ -24,7 +24,8 @@ import android.widget.LinearLayout;
 import android.widget.TextView;
 
 public class MainActivity extends Activity {
-    static final String HOST = "kadr.193-247-73-123.sslip.io";
+    static final String HOST = "getkadr.space";
+    static final String OLD_HOST = "kadr.193-247-73-123.sslip.io";
     static final String HOME = "https://" + HOST + "/";
     static final int FILE_REQ = 1;
 
@@ -52,7 +53,7 @@ public class MainActivity extends Activity {
         s.setMediaPlaybackRequiresUserGesture(false);
         s.setAllowFileAccess(false);
         s.setAllowContentAccess(true);
-        s.setUserAgentString(s.getUserAgentString() + " KadrApp/1");
+        s.setUserAgentString(s.getUserAgentString() + " KadrApp/2");
         CookieManager.getInstance().setAcceptCookie(true);
         CookieManager.getInstance().setAcceptThirdPartyCookies(web, false);
 
@@ -60,7 +61,7 @@ public class MainActivity extends Activity {
             @Override
             public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest req) {
                 Uri u = req.getUrl();
-                if (HOST.equals(u.getHost())) return false;
+                if (HOST.equals(u.getHost()) || OLD_HOST.equals(u.getHost())) return false;
                 try {
                     startActivity(new Intent(Intent.ACTION_VIEW, u));
                 } catch (ActivityNotFoundException ignored) { }
@@ -146,7 +147,7 @@ public class MainActivity extends Activity {
 
     private void load(Intent intent) {
         Uri data = intent != null ? intent.getData() : null;
-        if (data != null && HOST.equals(data.getHost())) web.loadUrl(data.toString());
+        if (data != null && (HOST.equals(data.getHost()) || OLD_HOST.equals(data.getHost()))) web.loadUrl(data.toString().replace(OLD_HOST, HOST));
         else web.loadUrl(HOME);
     }
 
