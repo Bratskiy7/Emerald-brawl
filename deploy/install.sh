@@ -18,11 +18,19 @@ command -v node >/dev/null || { echo "Нет Node.js. Он должен быть
 mkdir -p "$APP/data" "$APP/backups"
 if [ "$DOMAIN" != "kadr.193-247-73-123.sslip.io" ]; then
   IP="$(curl -s --max-time 10 https://api.ipify.org || true)"
-  RESOLVED="$(getent ahostsv4 "$DOMAIN" | awk '{print $1; exit}' || true)"
-  if [ -z "$RESOLVED" ] || { [ -n "$IP" ] && [ "$RESOLVED" != "$IP" ]; }; then
-    echo "!! Домен $DOMAIN пока не указывает на этот сервер (${RESOLVED:-не найден}, а сервер ${IP:-?})."
-    echo "   Добавьте у регистратора A-запись: $DOMAIN → ${IP:-IP сервера}. Обычно она начинает работать за 15–60 минут."
-    exit 1
+  ALL="$(getent ahostsv4 "$DOMAIN" | awk '{print $1}' | sort -u | tr '\n' ' ' || true)"
+  if [ -z "$ALL" ] || { [ -n "$IP" ] && ! echo " $ALL" | grep -q " $IP "; }; then
+    if [ "$DOMAIN" = "$SAVED_DOMAIN" ]; then
+      echo "!! Внимание: DNS сервера сейчас видит у $DOMAIN адрес(а) ${ALL:-никаких}, а сервер — ${IP:-?}. Продолжаю обновление."
+    else
+      echo "!! Домен $DOMAIN пока не указывает на этот сервер (${ALL:-не найден}, а сервер ${IP:-?})."
+      echo "   Добавьте у регистратора A-запись: $DOMAIN → ${IP:-IP сервера}. Обычно она начинает работать за 15–60 минут."
+      echo "   Если уверены, что всё настроено: KADR_SKIP_DNS_CHECK=1 перед командой."
+      [ "${KADR_SKIP_DNS_CHECK:-}" = "1" ] || exit 1
+    fi
+  elif [ "$(echo $ALL | wc -w)" -gt 1 ]; then
+    echo "!! Внимание: у $DOMAIN несколько A-записей: $ALL"
+    echo "   Оставьте у регистратора только $IP — иначе часть посетителей попадёт не на Кадр."
   fi
 fi
 echo "$DOMAIN" > "$APP/domain"
