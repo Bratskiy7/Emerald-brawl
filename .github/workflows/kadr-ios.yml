@@ -1,0 +1,49 @@
+name: Kadr iOS
+
+on:
+  push:
+    branches: [kadr]
+    paths: ['ios/**', '.github/workflows/kadr-ios.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate project
+        working-directory: ios
+        run: xcodegen generate
+
+      - name: Build (unsigned)
+        working-directory: ios
+        run: |
+          xcodebuild -project Kadr.xcodeproj -scheme Kadr -configuration Release \
+            -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath build \
+            CURRENT_PROJECT_VERSION=${{ github.run_number }} \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" build
+
+      - name: Package IPA
+        run: |
+          mkdir -p Payload
+          cp -R ios/build/Build/Products/Release-iphoneos/Kadr.app Payload/
+          zip -qr kadr.ipa Payload
+
+      - name: Publish
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: kadr-ios
+          name: Кадр для iPhone
+          body: |
+            Неподписанный файл kadr.ipa для установки через Sideloadly или AltStore (нужен компьютер и Apple ID).
+            Проще: откройте сайт Кадра в Safari → «Поделиться» → «На экран «Домой»».
+          files: kadr.ipa
+          target_commitish: ${{ github.sha }}
+          make_latest: false

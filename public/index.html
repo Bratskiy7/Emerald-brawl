@@ -5,6 +5,13 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#3246E6">
 <title>Кадр</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" type="image/png" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-180.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Кадр">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Unbounded:wght@500;700&family=Manrope:wght@400;500;600;700;800&display=swap">
@@ -333,6 +340,10 @@ const OFFICIAL_AV=(()=>{const c=document.createElement('canvas');c.width=c.heigh
   x.fillRect(0,0,160,160);x.fillStyle='#fff';x.beginPath();x.roundRect?x.roundRect(36,36,88,88,26):x.rect(36,36,88,88);x.fill();x.fillStyle='#3246E6';x.beginPath();x.arc(80,80,22,0,7);x.fill();return c.toDataURL('image/png');})();
 const hnd=u=>esc(u.handle)+(u.verified?VB:'');
 const APK_URL='https://github.com/Bratskiy7/Emerald-brawl/releases/latest/download/kadr.apk';
+const IS_IOS=/iPhone|iPad|iPod/.test(navigator.userAgent)||(navigator.platform==='MacIntel'&&navigator.maxTouchPoints>1);
+const IS_STANDALONE=matchMedia('(display-mode: standalone)').matches||navigator.standalone===true||/KadrApp/.test(navigator.userAgent);
+const IOS_HOWTO='Откройте сайт в Safari, нажмите «Поделиться» (квадрат со стрелкой вверх) и выберите «На экран «Домой»». Кадр появится на главном экране как приложение.';
+let iosHintHidden=false;try{iosHintHidden=localStorage.getItem('kadr-ios-hint')==='1';}catch(e){}
 const isVideo=m=>/\.(mp4|webm|mov)$/i.test(m||'');
 
 /* ---------- api ---------- */
@@ -448,6 +459,7 @@ async function feedView(){
   const d=await api('feed');keep(d.posts);
   const sugg=d.suggest.length?`<section style="display:flex;flex-direction:column;gap:10px"><h2 class="sec-h">Кого почитать</h2><div class="sugg">${d.suggest.map(u=>`<div class="scard"><button data-act="user" data-h="${esc(u.handle)}" style="display:contents"><img class="av" src="${avOf(u)}" alt=""><b>${hnd(u)}</b><small>${num(u.followers)} ${plural(u.followers,['подписчик','подписчика','подписчиков'])}</small></button><button class="btn sm pri" data-act="follow" data-h="${esc(u.handle)}">Подписаться</button></div>`).join('')}</div></section>`:'';
   const list=d.posts.map(postHTML);if(sugg)list.splice(Math.min(3,list.length),0,sugg);
+  if(IS_IOS&&!IS_STANDALONE&&!iosHintHidden)list.unshift(`<div class="card" id="ioshint"><h3>Установите Кадр на iPhone</h3><p>${IOS_HOWTO}</p><div class="btns"><button class="btn sm" data-act="hideios">Понятно</button></div></div>`);
   return topBar(`<div class="logo"><i></i>кадр</div><div class="row">${themeBtn()}<button class="ibtn" data-act="tab" data-tab="new" aria-label="Новая публикация"><svg viewBox="0 0 24 24"><rect x="3.5" y="3.5" width="17" height="17" rx="5"/><path d="M12 8v8M8 12h8"/></svg></button></div>`)+
    `<div class="feed gut">${list.join('')}${d.posts.length?'':`<div class="empty"><strong>Лента пока пустая</strong>Подпишитесь на авторов или опубликуйте свой первый кадр</div>`}</div>`;
 }
@@ -501,7 +513,8 @@ function settingsView(){
     <p class="err" id="p-err" hidden></p>
     <button class="btn" style="min-height:44px">Сменить пароль</button>
   </form>
-  ${/KadrApp/.test(navigator.userAgent)?'':`<div class="card"><h3>Приложение для Android</h3><p>Кадр как отдельное приложение: значок на главном экране, без адресной строки браузера.</p><a class="btn pri" style="display:grid;place-items:center;min-height:44px;text-decoration:none" href="${APK_URL}" target="_blank" rel="noopener">Скачать APK</a></div>`}
+  ${IS_IOS&&!IS_STANDALONE?`<div class="card"><h3>Приложение для iPhone</h3><p>${IOS_HOWTO}</p></div>`:''}
+  ${/KadrApp/.test(navigator.userAgent)||IS_IOS?'':`<div class="card"><h3>Приложение для Android</h3><p>Кадр как отдельное приложение: значок на главном экране, без адресной строки браузера.</p><a class="btn pri" style="display:grid;place-items:center;min-height:44px;text-decoration:none" href="${APK_URL}" target="_blank" rel="noopener">Скачать APK</a></div>`}
   <button class="btn danger" style="min-height:44px" data-act="logout">Выйти из аккаунта</button></div>`;
 }
 /* support (user side) */
@@ -768,6 +781,7 @@ document.addEventListener('click',async e=>{
     case 'dodelete':await api('posts/'+a.dataset.id,{method:'DELETE'});closeOv();toast('Публикация удалена');render(true);break;
     case 'delcomment':{const d=await api('posts/'+a.dataset.pid+'/comments/'+a.dataset.cid,{method:'DELETE'});const ov=$('.ov');ov?._paint?.(d.post);updatePost(d.post);break;}
     case 'follow':{const h=a.dataset.h;const d=await api('users/'+encodeURIComponent(h)+'/follow',{body:{}});toast(d.user.isFollowing?'Вы подписались на '+h:'Подписка отменена');render(true);break;}
+    case 'hideios':iosHintHidden=true;try{localStorage.setItem('kadr-ios-hint','1');}catch(x){}$('#ioshint')?.remove();break;
     case 'pick':$('#file').click();break;
     case 'textpost':S.draft={text:true,cap:''};render();break;
     case 'filter':S.draft.f=+a.dataset.f;$('#pv').style.filter=FILTERS[S.draft.f][1];document.querySelectorAll('.flt').forEach(b=>b.setAttribute('aria-pressed',b===a));break;
