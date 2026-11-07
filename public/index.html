@@ -456,6 +456,7 @@ function showAuth(){
     <form class="form" id="authf">
       ${reg?`<label>Имя<input id="a-name" maxlength="40" autocomplete="name" required placeholder="Как вас зовут"></label>`:''}
       <label>Имя пользователя<input id="a-handle" maxlength="24" autocomplete="username" autocapitalize="none" spellcheck="false" required placeholder="${reg?'латиница, цифры, . и _':'например, kadr'}"></label>
+      ${reg?`<label>Почта<input id="a-email" type="email" maxlength="120" autocomplete="email" autocapitalize="none" spellcheck="false" required placeholder="name@yandex.ru"></label>`:''}
       <label>Пароль<input id="a-pw" type="password" maxlength="200" autocomplete="${reg?'new-password':'current-password'}" required placeholder="${reg?'не короче 6 символов':''}"></label>
       <p class="err" id="a-err" hidden></p>
       <button class="btn pri" style="min-height:46px">${reg?'Создать аккаунт':'Войти'}</button>
@@ -463,8 +464,8 @@ function showAuth(){
       ${reg?`<p style="margin:0;font-size:13px;color:var(--muted);text-align:center">${REF?`Вас пригласил(-а) <b style="color:var(--fg)">@${esc(REF)}</b>. `:''}После регистрации вы автоматически подпишетесь на официальный канал @kadr</p>`:''}
     </form></div>`;
   $('#authf').addEventListener('submit',async e=>{e.preventDefault();const err=$('#a-err');err.hidden=true;const btn=e.target.querySelector('.btn');btn.disabled=true;
-    try{const body={handle:$('#a-handle').value.trim().toLowerCase(),password:$('#a-pw').value};if(reg){body.name=$('#a-name').value.trim();if(REF)body.ref=REF;}
-      const d=await api(reg?'register':'login',{body,auth:true});ME=d.me;S={...S,tab:'feed',user:null,sub:null};if(reg){REF=null;try{localStorage.removeItem('kadr-ref');}catch(x){}}applyDeepLink();render();if(reg)toast('Аккаунт создан. Добро пожаловать!');}
+    try{const body={handle:$('#a-handle').value.trim().toLowerCase(),password:$('#a-pw').value};if(reg){body.name=$('#a-name').value.trim();body.email=$('#a-email').value.trim();if(REF)body.ref=REF;}
+      const d=await api(reg?'register':'login',{body,auth:true});ME=d.me;S={...S,tab:'feed',user:null,sub:null};if(reg){REF=null;try{localStorage.removeItem('kadr-ref');}catch(x){}}applyDeepLink();await render();if(reg){if(d.emailSent)verifySheet();else toast('Аккаунт создан. Добро пожаловать!');}}
     catch(x){err.textContent=x.message;err.hidden=false;btn.disabled=false;}});
 }
 
@@ -472,20 +473,20 @@ function showReset(){
   const step2=!!S.resetHandle;
   $('#app').innerHTML=`<div class="auth gut"><div class="logo"><i></i>кадр</div>
     <h2 class="sec-h" style="text-align:center">Восстановление пароля</h2>
-    ${step2?`<form class="form" id="rs2"><p style="margin:0;color:var(--muted);font-size:14px;text-align:center">Если к аккаунту <b style="color:var(--fg)">@${esc(S.resetHandle)}</b> подключён Telegram, бот прислал туда 6-значный код.</p>
-      <label>Код из Telegram<input id="rs-code" inputmode="numeric" autocomplete="one-time-code" maxlength="6" required></label>
+    ${step2?`<form class="form" id="rs2"><p style="margin:0;color:var(--muted);font-size:14px;text-align:center">Если к аккаунту <b style="color:var(--fg)">${esc(S.resetHandle)}</b> подтверждена почта или подключён Telegram, мы отправили туда 6-значный код. Письмо может попасть в «Спам».</p>
+      <label>Код из письма или Telegram<input id="rs-code" inputmode="numeric" autocomplete="one-time-code" maxlength="6" required></label>
       <label>Новый пароль<input id="rs-pw" type="password" autocomplete="new-password" minlength="6" required></label>
       <p class="err" id="rs-err" hidden></p><button class="btn pri" style="min-height:46px">Сменить пароль и войти</button>
       <button type="button" class="linkbtn" data-act="resetagain">Отправить код ещё раз</button></form>`
-    :`<form class="form" id="rs1"><p style="margin:0;color:var(--muted);font-size:14px;text-align:center">Мы пришлём код в Telegram, если он подключён к аккаунту (Профиль → шестерёнка → «Подключить Telegram»).</p>
-      <label>Имя пользователя<input id="rs-h" autocapitalize="none" spellcheck="false" maxlength="24" required></label>
+    :`<form class="form" id="rs1"><p style="margin:0;color:var(--muted);font-size:14px;text-align:center">Пришлём код на подтверждённую почту и в Telegram, если он подключён.</p>
+      <label>Почта или имя пользователя<input id="rs-h" autocapitalize="none" spellcheck="false" maxlength="120" autocomplete="username" required></label>
       <p class="err" id="rs-err" hidden></p><button class="btn pri" style="min-height:46px">Получить код</button></form>`}
-    <p style="margin:0;font-size:13px;color:var(--muted);text-align:center">Telegram не подключён? Попросите знакомого написать в поддержку Кадра: администратор сбросит пароль вручную.</p>
+    <p style="margin:0;font-size:13px;color:var(--muted);text-align:center">Код не пришёл? Проверьте папку «Спам». Если почта не была подтверждена, попросите знакомого написать в поддержку Кадра: администратор сбросит пароль вручную.</p>
     <button type="button" class="linkbtn" data-act="authmode" data-m="login">← Вернуться ко входу</button></div>`;
   const f1=$('#rs1');if(f1)f1.addEventListener('submit',async e=>{e.preventDefault();const er=$('#rs-err');er.hidden=true;
-    try{const h=$('#rs-h').value.trim().toLowerCase().replace(/^@/,'');await api('reset/request',{body:{handle:h},auth:true});S.resetHandle=h;showReset();}catch(x){er.textContent=x.message;er.hidden=false;}});
+    try{const h=$('#rs-h').value.trim().toLowerCase();await api('reset/request',{body:{login:h},auth:true});S.resetHandle=h;showReset();}catch(x){er.textContent=x.message;er.hidden=false;}});
   const f2=$('#rs2');if(f2)f2.addEventListener('submit',async e=>{e.preventDefault();const er=$('#rs-err');er.hidden=true;
-    try{const d=await api('reset/confirm',{body:{handle:S.resetHandle,code:$('#rs-code').value,password:$('#rs-pw').value},auth:true});ME=d.me;S.resetHandle=null;S.auth='login';S.tab='feed';S.sub=null;render();toast('Пароль изменён, вы вошли');}
+    try{const d=await api('reset/confirm',{body:{login:S.resetHandle,code:$('#rs-code').value,password:$('#rs-pw').value},auth:true});ME=d.me;S.resetHandle=null;S.auth='login';S.tab='feed';S.sub=null;render();toast('Пароль изменён, вы вошли');}
     catch(x){er.textContent=x.message;er.hidden=false;}});
 }
 
@@ -589,6 +590,7 @@ async function profileView(h){
   if(me){
     body+=`<div class="btns"><button class="btn" data-act="sub" data-sub="settings">Редактировать</button><button class="btn" data-act="sub" data-sub="support">Поддержка${ME.supportUnread?`<span class="n">${ME.supportUnread}</span>`:''}</button></div>`;
     if(ME.role==='admin'){const n=(ME.adminOpen||0)+(ME.adminReports||0);body+=`<div class="btns"><button class="btn pri" data-act="sub" data-sub="admin">Админ-панель${n?`<span class="n">${n}</span>`:''}</button></div>`;}
+    if(!ME.email||(!ME.emailVerified&&ME.mailAvailable))body+=`<div class="card"><h3>${ME.email?'Подтвердите почту':'Добавьте почту'}</h3><p>${ME.email?'Без подтверждения не получится восстановить пароль по почте.':'Почта нужна, чтобы восстановить пароль, если вы его забудете.'}</p><button class="btn pri" data-act="sub" data-sub="settings">${ME.email?'Подтвердить':'Добавить почту'}</button></div>`;
     if(!u.official)body+=inviteCard();
     if(!u.verified)body+=`<div class="card"><h3>${VB} Синяя галочка</h3><p>Галочка показывает, что аккаунт настоящий. Заявку рассматривает команда Кадра, ответ придёт в поддержку.</p><button class="btn pri" data-act="askverify">Подать заявку</button></div>`;
   }else body+=`<div class="btns"><button class="btn${u.isFollowing?'':' pri'}" data-act="follow" data-h="${esc(u.handle)}">${u.isFollowing?'Вы подписаны':'Подписаться'}</button></div>`;
@@ -618,6 +620,7 @@ function settingsView(){
     <p class="err" id="p-err" hidden></p>
     <button class="btn" style="min-height:44px">Сменить пароль</button>
   </form>
+  ${emailCard()}
   ${tgCard()}
   ${IS_IOS&&!IS_STANDALONE?`<div class="card"><h3>Приложение для iPhone</h3><p>${IOS_HOWTO}</p></div>`:''}
   ${/KadrApp/.test(navigator.userAgent)||IS_IOS?'':`<div class="card"><h3>Приложение для Android</h3><p>Кадр как отдельное приложение: значок на главном экране, без адресной строки браузера.</p><a class="btn pri" style="display:grid;place-items:center;min-height:44px;text-decoration:none" href="${APK_URL}" target="_blank" rel="noopener">Скачать APK</a></div>`}
@@ -673,7 +676,7 @@ async function adminView(){
     const d=await api('admin/users?q='+encodeURIComponent(S.aq||''));
     body=`<div class="search">${I.search}<input id="aq" type="search" placeholder="Имя или @username" value="${esc(S.aq||'')}" autocomplete="off"></div>
      <div id="ulist">${d.users.map(u=>`<div class="urow2" data-uid="${u.id}">
-       <button class="urow" data-act="user" data-h="${esc(u.handle)}"><img class="av" src="${avOf(u)}" alt=""><span style="min-width:0"><b>${hnd(u)}${u.role==='admin'?'<span class="pill blue">админ</span>':''}${u.banned?'<span class="pill red">заблокирован</span>':''}</b><small>${esc(u.name)} · ${num(u.posts)} публ. · ${num(u.followers)} подп. · с ${new Date(u.createdAt).toLocaleDateString('ru-RU')}</small></span></button>
+       <button class="urow" data-act="user" data-h="${esc(u.handle)}"><img class="av" src="${avOf(u)}" alt=""><span style="min-width:0"><b>${hnd(u)}${u.role==='admin'?'<span class="pill blue">админ</span>':''}${u.banned?'<span class="pill red">заблокирован</span>':''}</b><small>${esc(u.name)}${u.email?` · ${esc(u.email)}${u.emailVerified?' ✓':''}`:''} · ${num(u.posts)} публ. · ${num(u.followers)} подп. · с ${new Date(u.createdAt).toLocaleDateString('ru-RU')}</small></span></button>
        <div class="btns"><button class="btn sm${u.verified?'':' pri'}" data-act="averify" data-v="${u.verified?0:1}">${u.verified?'Снять галочку':'Выдать галочку'}</button>
        ${u.official?'':`<button class="btn sm" data-act="arole" data-v="${u.role==='admin'?'user':'admin'}">${u.role==='admin'?'Снять админа':'Сделать админом'}</button><button class="btn sm danger" data-act="aban" data-v="${u.banned?0:1}">${u.banned?'Разблокировать':'Заблокировать'}</button><button class="btn sm" data-act="areset">Сбросить пароль</button>`}</div></div>`).join('')||'<div class="empty">Никого не нашли</div>'}</div>`;
   }else{
@@ -794,6 +797,22 @@ async function openComments(id){
 async function openPost(id){
   const o=sheet('Публикация',loading());o.querySelector('.sheet').style.maxHeight='94%';
   try{const d=await api('posts/'+id);posts[id]=d.post;o.querySelector('.body').innerHTML=postHTML({...d.post,comments:d.post.comments.slice(-2)});}catch(e){o.querySelector('.body').innerHTML=errBox(e.message);}
+}
+function emailCard(){
+  const has=!!ME.email,ok=ME.emailVerified;
+  return `<form class="card form" id="emf"><h3>Почта</h3>
+    <p>${!has?'Добавьте почту, чтобы восстановить пароль, если забудете его.':ok?'Почта подтверждена ✓. На неё придёт код, если вы забудете пароль.':'Почта не подтверждена. Без подтверждения восстановить пароль по ней не получится.'}</p>
+    <input id="em-v" type="email" maxlength="120" autocapitalize="none" spellcheck="false" value="${esc(ME.email||'')}" placeholder="name@yandex.ru" required>
+    <p class="err" id="em-err" hidden></p>
+    <div class="btns">${has&&!ok?'<button type="button" class="btn pri" data-act="verifyemail">Ввести код</button>':''}<button class="btn${has&&!ok?'':' pri'}">${!has?'Добавить почту':ok?'Сменить почту':'Отправить письмо ещё раз'}</button></div></form>`;
+}
+function verifySheet(){
+  const o=sheet('Подтвердите почту',`<form class="form" id="vef"><p style="margin:0;color:var(--muted);font-size:14px">Мы отправили 6-значный код на <b style="color:var(--fg)">${esc(ME.email)}</b>. Если письма нет, проверьте «Спам».</p>
+    <input id="ve-code" inputmode="numeric" autocomplete="one-time-code" maxlength="6" required placeholder="Код из письма" style="font-size:22px;letter-spacing:.3em;text-align:center">
+    <p class="err" id="ve-err" hidden></p><button class="btn pri" style="min-height:44px">Подтвердить</button>
+    <button type="button" class="linkbtn" data-act="close">Подтвержу позже</button></form>`);
+  o.querySelector('#vef').addEventListener('submit',async e=>{e.preventDefault();try{const d=await api('me/email/verify',{body:{code:o.querySelector('#ve-code').value}});ME=d.me;closeOv();toast('Почта подтверждена');if(S.sub==='settings')render(true);}
+    catch(x){const er=o.querySelector('#ve-err');er.textContent=x.message;er.hidden=false;}});
 }
 function tgCard(){
   const t=ME.tg||{};
@@ -937,6 +956,9 @@ function bindView(){
   const prof=$('#prof');if(prof)prof.addEventListener('submit',async e=>{e.preventDefault();const err=$('#e-err');err.hidden=true;
     try{const body={name:$('#e-name').value,bio:$('#e-bio').value};if(!ME.official)body.handle=$('#e-handle').value.trim().toLowerCase();const d=await api('me',{method:'PATCH',body});ME=d.me;toast('Профиль сохранён');S.sub=null;S.tab='me';render();}
     catch(x){err.textContent=x.message;err.hidden=false;}});
+  const emf=$('#emf');if(emf)emf.addEventListener('submit',async e=>{e.preventDefault();const er=$('#em-err');er.hidden=true;const bt=emf.querySelector('button:not([type])');bt.disabled=true;
+    try{const d=await api('me/email',{body:{email:$('#em-v').value.trim()}});ME=d.me;await render(true);verifySheet();}
+    catch(x){try{ME=(await api('me')).me;}catch(y){}er.textContent=x.message;er.hidden=false;bt.disabled=false;}});
   const pwf=$('#pwf');if(pwf)pwf.addEventListener('submit',async e=>{e.preventDefault();const err=$('#p-err');err.hidden=true;
     try{await api('me/password',{body:{old:$('#p-old').value,password:$('#p-new').value}});pwf.reset();toast('Пароль изменён. Другие устройства вышли из аккаунта');}
     catch(x){err.textContent=x.message;err.hidden=false;}});
@@ -1004,6 +1026,7 @@ document.addEventListener('click',async e=>{
       if(!g.items.length){STORIES.splice(SV.gi,1);closeStory();}else{SV.i=Math.min(SV.i,g.items.length-1);SV.paused=false;showStory();}break;}
     case 'actcomments':openComments(a.dataset.id);break;
     case 'resetagain':S.resetHandle=null;showReset();break;
+    case 'verifyemail':verifySheet();break;
     case 'report':reportSheet(a.dataset.id);break;
     case 'copylink':closeOv();copyText(location.origin+location.pathname+'?p='+a.dataset.id,'Ссылка на публикацию скопирована');break;
     case 'repact':{const row=a.closest('[data-pid]');const act2=a.dataset.a;

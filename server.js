@@ -3,6 +3,7 @@
 // Хранилище: data/data.json, медиа: data/uploads/. Порт: PORT (по умолчанию 3200).
 const http = require('http');
 const https = require('https');
+const tls = require('tls');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
@@ -22,7 +23,7 @@ fs.mkdirSync(UP, { recursive: true });
 let db = { users: {}, sessions: {}, posts: {}, tickets: {}, reports: {}, tgLinks: {}, tgOffset: 0, seq: 0 };
 if (fs.existsSync(DB_FILE)) db = Object.assign(db, JSON.parse(fs.readFileSync(DB_FILE, 'utf8')));
 db.reports = db.reports || {}; db.tgLinks = db.tgLinks || {}; db.seq = db.seq || 0;
-db.activity = db.activity || {}; db.stories = db.stories || {}; db.resets = db.resets || {};
+db.activity = db.activity || {}; db.stories = db.stories || {}; db.resets = db.resets || {}; db.emailCodes = db.emailCodes || {};
 let saveTimer = null;
 function save() { clearTimeout(saveTimer); saveTimer = setTimeout(flush, 300); }
 function flush() {
@@ -129,6 +130,56 @@ async function handleTgUpdate(upd) {
   }
 })();
 
+/* ---------------- e-mail (SMTP over TLS, port 465) ---------------- */
+const MAIL_FILE = path.join(DIR, 'mail.json');
+let MAIL = {};
+function loadMail() { try { MAIL = JSON.parse(fs.readFileSync(MAIL_FILE, 'utf8')); } catch { MAIL = {}; } }
+loadMail();
+fs.watchFile(MAIL_FILE, { interval: 5000 }, loadMail);
+const mailReady = () => !!(MAIL.host && MAIL.user && MAIL.pass);
+const EMAIL_RE = /^[^\s@<>()"',;:]+@[^\s@<>()"',;:]+\.[a-zа-яё]{2,}$/i;
+const normEmail = e => String(e || '').trim().toLowerCase();
+const byEmail = e => { e = normEmail(e); return e ? Object.values(db.users).find(u => u.email === e) : null; };
+const b64 = s => Buffer.from(s, 'utf8').toString('base64');
+function smtpSend(to, subject, text) {
+  return new Promise((resolve, reject) => {
+    if (!mailReady()) return reject(new Error('Почта не настроена'));
+    const from = MAIL.from || MAIL.user;
+    const sock = tls.connect({ host: MAIL.host, port: +MAIL.port || 465, servername: MAIL.host, timeout: 20000 });
+    let buf = '', waiter = null, done = false;
+    const finish = err => { if (done) return; done = true; try { sock.end(); } catch {} err ? reject(err) : resolve(); };
+    sock.setEncoding('utf8');
+    sock.on('data', d => { buf += d; if (/(^|\n)\d{3} [^\n]*\n$/.test(buf.replace(/\r/g, '')) && waiter) { const w = waiter; waiter = null; const r = buf; buf = ''; w(r); } });
+    sock.on('error', e => finish(e)); sock.on('timeout', () => finish(new Error('SMTP timeout')));
+    const expect = (code) => new Promise((res2, rej2) => { waiter = r => { const last = r.replace(/\r/g, '').trim().split('\n').pop(); last.startsWith(String(code)) ? res2(r) : rej2(new Error('SMTP: ' + last.slice(0, 200))); }; });
+    const cmd = (line, code) => { const p = expect(code); sock.write(line + '\r\n'); return p; };
+    const body = b64(text).replace(/.{76}/g, '$&\r\n');
+    const msg = [`From: =?UTF-8?B?${b64('Кадр')}?= <${from}>`, `To: <${to}>`, `Subject: =?UTF-8?B?${b64(subject)}?=`,
+      `Date: ${new Date().toUTCString()}`, `Message-ID: <${crypto.randomBytes(12).toString('hex')}@${from.split('@')[1]}>`,
+      'MIME-Version: 1.0', 'Content-Type: text/plain; charset=utf-8', 'Content-Transfer-Encoding: base64', '', body, '.'].join('\r\n');
+    (async () => {
+      await expect(220);
+      await cmd('EHLO kadr', 250);
+      await cmd('AUTH LOGIN', 334); await cmd(b64(MAIL.user), 334); await cmd(b64(MAIL.pass), 235);
+      await cmd(`MAIL FROM:<${from}>`, 250); await cmd(`RCPT TO:<${to}>`, 250);
+      await cmd('DATA', 354); await cmd(msg, 250);
+      sock.write('QUIT\r\n'); finish();
+    })().catch(finish);
+  });
+}
+function newCode() { const code = String(crypto.randomInt(100000, 1000000)); const salt = crypto.randomBytes(8).toString('hex'); return { code, salt, hash: crypto.scryptSync(code, salt, 32).toString('hex') }; }
+const codeOk = (rec, code) => crypto.timingSafeEqual(crypto.scryptSync(String(code || '').trim(), rec.salt, 32), Buffer.from(rec.hash, 'hex'));
+async function sendEmailCode(u) {
+  if (!mailReady() || !u.email) return false;
+  const c = newCode();
+  db.emailCodes[u.id] = { email: u.email, salt: c.salt, hash: c.hash, exp: Date.now() + 30 * 60e3, tries: 0, sentAt: Date.now() }; save();
+  try {
+    await smtpSend(u.email, `Код подтверждения Кадра: ${c.code}`,
+      `Здравствуйте, ${u.name}!\n\nВаш код для подтверждения почты в Кадре: ${c.code}\n\nКод действует 30 минут. Если вы не регистрировались в Кадре, просто проигнорируйте это письмо.\n\n— Команда Кадра`);
+    return true;
+  } catch (e) { console.error('[mail]', e.message); return false; }
+}
+
 /* in-app activity feed */
 function addActivity(userId, a) {
   if (!db.users[userId] || userId === a.fromId) return;
@@ -185,6 +236,7 @@ function meView(u) {
   const t = Object.values(db.tickets).filter(t => t.userId === u.id && t.unreadUser).length;
   const out = { ...pubUser(u, u), role: u.role || 'user', supportUnread: t, activityUnread: (db.activity[u.id] || []).filter(a => !a.read).length,
     tg: { available: !!TG.token, bot: TG.username || null, linked: !!u.tg, notify: !!(u.tg && u.tg.notify !== false) },
+    email: u.email || null, emailVerified: !!u.emailVerified, mailAvailable: mailReady(),
     invite: { ...inviteStats(u), path: '?ref=' + u.handle } };
   if (u.role === 'admin') {
     out.adminOpen = Object.values(db.tickets).filter(t => t.status === 'open').length;
@@ -300,10 +352,13 @@ route('POST', '/api/register', null, async (req, res) => {
   need(!RESERVED.has(handle) && !byHandle(handle), 409, 'Это имя пользователя уже занято');
   need(name.length >= 1, 400, 'Укажите имя');
   need(pw.length >= 6 && pw.length <= 200, 400, 'Пароль должен быть не короче 6 символов');
+  const email = normEmail(b.email);
+  need(EMAIL_RE.test(email) && email.length <= 120, 400, 'Укажите настоящую почту, например name@yandex.ru');
+  need(!byEmail(email), 409, 'Эта почта уже привязана к другому аккаунту. Войдите в него или восстановите пароль');
   const off = official();
   const inviter = b.ref ? byHandle(String(b.ref).replace(/^@/, '')) : null;
   const u = { id: newId('u'), handle, name, bio: '', avatar: null, role: 'user', verified: false, follows: off ? [off.id] : [], saved: [], createdAt: Date.now(),
-    num: ++db.seq, invitedBy: inviter && !inviter.banned ? inviter.id : undefined, ...hashPw(pw) };
+    num: ++db.seq, invitedBy: inviter && !inviter.banned ? inviter.id : undefined, email, emailVerified: false, ...hashPw(pw) };
   if (inviter && !inviter.banned && !inviter.official) u.follows.push(inviter.id);
   db.users[u.id] = u; save();
   if (u.invitedBy) {
@@ -311,7 +366,8 @@ route('POST', '/api/register', null, async (req, res) => {
     addActivity(inviter.id, { type: 'invite', fromId: u.id });
     notify(inviter.id, `🎉 По вашей ссылке зарегистрировался ${at(u)}!\nКогда друг опубликует первый пост, он засчитается в «Амбассадора»: сейчас ${s.active} из ${s.need}.`, '?u=' + u.handle);
   }
-  send(res, 200, { me: meView(u) }, { 'Set-Cookie': startSession(req, res, u) });
+  const sent = await sendEmailCode(u);
+  send(res, 200, { me: meView(u), emailSent: sent }, { 'Set-Cookie': startSession(req, res, u) });
 });
 route('POST', '/api/login', null, async (req, res) => {
   need(!limited(req, 'login', 20, 600e3), 429, 'Слишком много попыток входа. Подождите 10 минут');
@@ -358,6 +414,30 @@ route('POST', '/api/me/telegram', 'user', async (req, res, me) => {
   const code = crypto.randomBytes(12).toString('hex');
   db.tgLinks[code] = { userId: me.id, exp: Date.now() + 15 * 60e3 }; save();
   send(res, 200, { url: `https://t.me/${TG.username}?start=${code}` });
+});
+route('POST', '/api/me/email', 'user', async (req, res, me) => {
+  need(!limited(req, 'em:' + me.id, 6, 3600e3), 429, 'Слишком много писем за час. Подождите немного');
+  const b = await readJson(req); const email = normEmail(b.email);
+  if (email && email !== me.email) {
+    need(EMAIL_RE.test(email) && email.length <= 120, 400, 'Укажите настоящую почту, например name@yandex.ru');
+    const other = byEmail(email); need(!other || other.id === me.id, 409, 'Эта почта уже привязана к другому аккаунту');
+    me.email = email; me.emailVerified = false; delete db.emailCodes[me.id]; save();
+  }
+  need(me.email, 400, 'Укажите почту');
+  need(!me.emailVerified, 400, 'Почта уже подтверждена');
+  need(mailReady(), 503, 'Отправка писем пока не настроена. Почта сохранена, подтвердить её можно будет позже');
+  const prev = db.emailCodes[me.id];
+  need(!(prev && prev.email === me.email && Date.now() - prev.sentAt < 60e3), 429, 'Письмо уже отправлено. Новое можно запросить через минуту');
+  need(await sendEmailCode(me), 502, 'Не получилось отправить письмо. Проверьте адрес или попробуйте позже');
+  send(res, 200, { me: meView(me) });
+});
+route('POST', '/api/me/email/verify', 'user', async (req, res, me) => {
+  const b = await readJson(req); const r = db.emailCodes[me.id];
+  need(r && r.email === me.email && r.exp > Date.now(), 400, 'Код устарел. Отправьте письмо ещё раз');
+  r.tries++; save(); need(r.tries <= 5, 400, 'Слишком много неверных попыток. Отправьте письмо ещё раз');
+  need(codeOk(r, b.code), 400, `Неверный код. Осталось попыток: ${5 - r.tries}`);
+  me.emailVerified = true; delete db.emailCodes[me.id]; save();
+  send(res, 200, { me: meView(me) });
 });
 route('DELETE', '/api/me/telegram', 'user', async (req, res, me) => {
   if (me.tg) tgCall('sendMessage', { chat_id: me.tg.chatId, text: 'Telegram отключён от аккаунта Кадра. Уведомлений больше не будет.' });
@@ -496,6 +576,7 @@ function cleanupStories() {
     if (s.media && !Object.values(db.posts).some(p => p.media === s.media) && !Object.values(db.users).some(u => u.avatar === s.media)) fs.rm(path.join(DIR, s.media), () => {});
   }
   for (const [uid, r] of Object.entries(db.resets)) if (r.exp < Date.now()) { delete db.resets[uid]; changed = true; }
+  for (const [uid, r] of Object.entries(db.emailCodes)) if (r.exp < Date.now()) { delete db.emailCodes[uid]; changed = true; }
   if (changed) save();
 }
 setInterval(cleanupStories, 10 * 60e3).unref();
@@ -532,28 +613,34 @@ route('DELETE', '/api/stories/:id', 'user', async (req, res, me, id) => {
   delete db.stories[id]; save(); send(res, 200, { ok: true });
 });
 
-/* password reset via Telegram */
+/* password reset via e-mail and/or Telegram */
+const findAccount = x => { x = String(x || '').trim(); return x.includes('@') && !x.startsWith('@') ? byEmail(x) : byHandle(x.replace(/^@/, '')); };
 route('POST', '/api/reset/request', null, async (req, res) => {
   need(!limited(req, 'rst', 8, 3600e3), 429, 'Слишком много попыток. Попробуйте через час');
-  const b = await readJson(req); const u = byHandle(String(b.handle || '').trim().replace(/^@/, ''));
-  const generic = { ok: true, message: 'Если к этому аккаунту подключён Telegram, мы отправили туда код. Он действует 10 минут.' };
-  if (!u || u.banned || !u.tg || !TG.token) return send(res, 200, generic);
+  const b = await readJson(req); const u = findAccount(b.login || b.handle);
+  const generic = { ok: true, message: 'Если такой аккаунт есть и к нему подтверждена почта или подключён Telegram, мы отправили туда код. Он действует 15 минут.' };
+  if (!u || u.banned) return send(res, 200, generic);
+  const viaMail = mailReady() && u.email && u.emailVerified, viaTg = !!(u.tg && TG.token);
+  if (!viaMail && !viaTg) return send(res, 200, generic);
   const prev = db.resets[u.id];
   if (prev && prev.sentAt && Date.now() - prev.sentAt < 60e3) return send(res, 200, generic);
-  const code = String(crypto.randomInt(100000, 1000000)); const salt = crypto.randomBytes(8).toString('hex');
-  db.resets[u.id] = { salt, hash: crypto.scryptSync(code, salt, 32).toString('hex'), exp: Date.now() + 10 * 60e3, tries: 0, sentAt: Date.now() }; save();
-  tgCall('sendMessage', { chat_id: u.tg.chatId, parse_mode: 'HTML',
-    text: `🔑 Код для сброса пароля в Кадре: <code>${code}</code>\n\nДействует 10 минут. Если вы не запрашивали сброс, просто проигнорируйте это сообщение — пароль не изменится.` });
+  const c = newCode();
+  db.resets[u.id] = { salt: c.salt, hash: c.hash, exp: Date.now() + 15 * 60e3, tries: 0, sentAt: Date.now() }; save();
+  if (viaTg) tgCall('sendMessage', { chat_id: u.tg.chatId, parse_mode: 'HTML',
+    text: `🔑 Код для сброса пароля в Кадре: <code>${c.code}</code>\n\nДействует 15 минут. Если вы не запрашивали сброс, просто проигнорируйте это сообщение — пароль не изменится.` });
+  if (viaMail) smtpSend(u.email, `Сброс пароля в Кадре: ${c.code}`,
+    `Здравствуйте, ${u.name}!\n\nКто-то (надеемся, вы) запросил сброс пароля для @${u.handle}.\nКод: ${c.code}\n\nКод действует 15 минут. Если вы не запрашивали сброс, просто проигнорируйте это письмо — пароль не изменится.\n\n— Команда Кадра`)
+    .catch(e => console.error('[mail]', e.message));
   send(res, 200, generic);
 });
 route('POST', '/api/reset/confirm', null, async (req, res) => {
   need(!limited(req, 'rstc', 30, 3600e3), 429, 'Слишком много попыток. Попробуйте через час');
-  const b = await readJson(req); const u = byHandle(String(b.handle || '').trim().replace(/^@/, ''));
+  const b = await readJson(req); const u = findAccount(b.login || b.handle);
   const r = u && db.resets[u.id];
   need(r && r.exp > Date.now(), 400, 'Код устарел или не запрашивался. Запросите новый');
   r.tries++; save();
   need(r.tries <= 5, 400, 'Слишком много неверных попыток. Запросите новый код');
-  const ok = crypto.timingSafeEqual(crypto.scryptSync(String(b.code || '').trim(), r.salt, 32), Buffer.from(r.hash, 'hex'));
+  const ok = codeOk(r, b.code);
   need(ok, 400, `Неверный код. Осталось попыток: ${5 - r.tries}`);
   const pw = String(b.password || ''); need(pw.length >= 6 && pw.length <= 200, 400, 'Новый пароль должен быть не короче 6 символов');
   Object.assign(u, hashPw(pw)); delete db.resets[u.id];
@@ -609,7 +696,7 @@ route('GET', '/api/admin/stats', 'admin', async (req, res) => {
 route('GET', '/api/admin/users', 'admin', async (req, res) => {
   const q = clean(new URL(req.url, 'http://x').searchParams.get('q'), 60).toLowerCase().replace(/^@/, '');
   const list = Object.values(db.users).filter(u => !q || u.handle.includes(q) || u.name.toLowerCase().includes(q)).sort((a, b) => b.createdAt - a.createdAt).slice(0, 100);
-  send(res, 200, { users: list.map(u => ({ ...lite(u), role: u.role || 'user', banned: !!u.banned, createdAt: u.createdAt, followers: followersOf(u), posts: Object.values(db.posts).filter(p => p.userId === u.id).length })) });
+  send(res, 200, { users: list.map(u => ({ ...lite(u), email: u.email || null, emailVerified: !!u.emailVerified, role: u.role || 'user', banned: !!u.banned, createdAt: u.createdAt, followers: followersOf(u), posts: Object.values(db.posts).filter(p => p.userId === u.id).length })) });
 });
 route('POST', '/api/admin/users/:id', 'admin', async (req, res, me, id) => {
   const u = db.users[id]; need(u, 404, 'Пользователь не найден'); const b = await readJson(req);
