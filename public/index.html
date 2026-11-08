@@ -397,6 +397,9 @@ let DEEP=null,REF=null;
 (()=>{const q=new URLSearchParams(location.search);
   try{if(q.get('ref'))localStorage.setItem('kadr-ref',q.get('ref'));REF=localStorage.getItem('kadr-ref');}catch(e){REF=q.get('ref');}
   if(REF&&!/^[a-z0-9._]{3,24}$/.test(REF))REF=null;
+  const sq=(q.get('src')||'').toLowerCase();
+  if(/^[a-z0-9_-]{1,32}$/.test(sq)){let had=null;try{had=localStorage.getItem('kadr-src');if(!had)localStorage.setItem('kadr-src',sq);}catch(e){}
+    if(!document.cookie.includes('src='))fetch('api/visit',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({src:sq})}).catch(()=>{});}
   if(['p','u','support','admin'].some(k=>q.get(k)))DEEP=q;
   if(location.search)history.replaceState(null,'',location.pathname);})();
 const BADGES={ambassador:['✦','Амбассадор','Пригласил(-а) 3 друзей']};
@@ -466,7 +469,7 @@ function showAuth(){
       ${reg?`<p style="margin:0;font-size:13px;color:var(--muted);text-align:center">${REF?`Вас пригласил(-а) <b style="color:var(--fg)">@${esc(REF)}</b>. `:''}После регистрации вы автоматически подпишетесь на официальный канал @kadr</p>`:''}
     </form></div>`;
   $('#authf').addEventListener('submit',async e=>{e.preventDefault();const err=$('#a-err');err.hidden=true;const btn=e.target.querySelector('.btn');btn.disabled=true;
-    try{const body={handle:$('#a-handle').value.trim().toLowerCase(),password:$('#a-pw').value};if(reg){body.name=$('#a-name').value.trim();body.email=$('#a-email').value.trim();if(REF)body.ref=REF;}
+    try{const body={handle:$('#a-handle').value.trim().toLowerCase(),password:$('#a-pw').value};if(reg){body.name=$('#a-name').value.trim();body.email=$('#a-email').value.trim();if(REF)body.ref=REF;try{const sr=localStorage.getItem('kadr-src');if(sr)body.src=sr;}catch(x){}}
       const d=await api(reg?'register':'login',{body,auth:true});ME=d.me;S={...S,tab:'feed',user:null,sub:null};if(reg){REF=null;try{localStorage.removeItem('kadr-ref');}catch(x){}}applyDeepLink();await render();if(reg){if(d.emailSent)verifySheet();else toast('Аккаунт создан. Добро пожаловать!');}}
     catch(x){err.textContent=x.message;err.hidden=false;btn.disabled=false;}});
 }
@@ -659,12 +662,35 @@ async function ticketView(){
 }
 /* admin */
 async function adminView(){
-  const tabs=[['tickets','Обращения',ME.adminOpen],['reports','Жалобы',ME.adminReports],['broadcast','Рассылка'],['mail','Почта',ME.adminMail],['users','Люди'],['stats','Цифры']];
+  const tabs=[['tickets','Обращения',ME.adminOpen],['reports','Жалобы',ME.adminReports],['sources','Источники'],['broadcast','Рассылка'],['mail','Почта',ME.adminMail],['users','Люди'],['stats','Цифры']];
   let body='';
   if(S.adminTab==='tickets'){
     const d=await api('admin/tickets?status='+S.tstatus);
     body=`<div class="chips" style="padding-top:12px">${[['open','Ждут ответа'],['answered','Отвечены'],['closed','Закрыты'],['all','Все']].map(([k,l])=>`<button class="chip" data-act="tstatus" data-s="${k}" aria-pressed="${S.tstatus===k}">${l}${k==='open'&&ME.adminOpen?`<span class="n">${ME.adminOpen}</span>`:''}</button>`).join('')}</div>
       ${d.tickets.length?`<div class="tlist">${d.tickets.map(t=>ticketRow(t,true)).join('')}</div>`:`<div class="empty"><strong>Пусто</strong>${S.tstatus==='open'?'Все обращения разобраны':'Здесь пока ничего нет'}</div>`}`;
+  }else if(S.adminTab==='sources'){
+    const d=await api('admin/sources');const base=(d.base||location.origin+'/').replace(/\/?$/,'/');
+    const pct=(a,b)=>b?Math.round(a/b*100)+'%':'—';
+    const presets=[['tiktok','TikTok'],['shorts','YouTube Shorts'],['vk','VK Клипы'],['reels','Reels'],['tg','Telegram'],['pikabu','Pikabu'],['qr','QR / листовки']].filter(([k])=>!d.items.some(i=>i.slug===k));
+    const maxR=Math.max(1,...d.items.map(i=>i.regs),d.invited.regs,d.direct.regs);
+    const bar=(n,c)=>`<div class="invbar" style="margin-top:6px"><b style="width:${n/maxR*100}%;background:${c||'var(--accent)'}"></b></div>`;
+    body=`<form class="card form" id="srcf" style="margin-top:6px"><h3>🔗 Новая ссылка-источник</h3>
+      <p>Своя ссылка для каждой площадки. Откуда больше регистраций — туда и вкладывайтесь.</p>
+      <div style="display:flex;gap:8px;flex-wrap:wrap"><input id="src-name" maxlength="60" placeholder="Название, например TikTok" style="flex:2;min-width:140px" required><input id="src-slug" maxlength="32" placeholder="метка: tiktok" style="flex:1;min-width:110px" autocapitalize="none" spellcheck="false" required></div>
+      ${presets.length?`<div class="chips" style="padding:0">${presets.map(([k,l])=>`<button type="button" class="chip" data-act="srcpreset" data-k="${k}" data-l="${esc(l)}">+ ${esc(l)}</button>`).join('')}</div>`:''}
+      <p class="err" id="src-err" hidden></p><button class="btn pri" style="min-height:42px">Создать ссылку</button></form>
+      <div class="tiles" style="padding-block:12px"><div class="tile"><b>${num(d.direct.regs)}</b><span>напрямую, без метки</span>${bar(d.direct.regs,'var(--muted)')}</div><div class="tile"><b>${num(d.invited.regs)}</b><span>по приглашениям друзей</span>${bar(d.invited.regs,'var(--accent2)')}</div></div>
+      ${d.items.length?d.items.map(i=>`<div class="card" style="margin-bottom:10px;background:var(--surface)">
+        <h3 style="justify-content:space-between">${esc(i.name)}${i.auto?' <span class="pill">метка из ссылки</span>':''}<button class="ibtn" data-act="srcdel" data-k="${esc(i.slug)}" aria-label="Удалить" style="width:32px;height:32px">${I.trash}</button></h3>
+        <div class="secret" style="font-size:14px" id="srcl-${esc(i.slug)}">${esc(base)}s/${esc(i.slug)}</div>
+        <div class="btns"><button class="btn sm" data-act="srccopy" data-k="${esc(i.slug)}">Скопировать ссылку</button></div>
+        <div class="tiles" style="grid-template-columns:repeat(4,1fr);gap:6px">
+          <div class="tile" style="padding:8px"><b style="font-size:20px">${num(i.uniq)}</b><span>переходов</span></div>
+          <div class="tile" style="padding:8px"><b style="font-size:20px">${num(i.regs)}</b><span>регистраций</span></div>
+          <div class="tile" style="padding:8px"><b style="font-size:20px">${num(i.active)}</b><span>с постами</span></div>
+          <div class="tile" style="padding:8px"><b style="font-size:20px">${pct(i.regs,i.uniq)}</b><span>конверсия</span></div></div>
+        ${bar(i.regs)}<p style="margin:0">${i.week?`+${num(i.week)} за 7 дней · `:''}создана ${new Date(i.createdAt).toLocaleDateString('ru-RU')}</p></div>`).join('')
+        :'<div class="empty" style="padding:20px"><strong>Ссылок пока нет</strong>Нажмите «+ TikTok» выше, чтобы создать первую</div>'}`;
   }else if(S.adminTab==='broadcast'){
     const d=await api('admin/broadcasts');const A=d.audience;
     const ch=(k,l,n,dis,hint)=>`<label style="display:flex;flex-direction:row;gap:10px;align-items:flex-start;font-weight:600;font-size:14px;text-transform:none;letter-spacing:0;color:var(--fg)"><input type="checkbox" id="bc-${k}" ${dis?'disabled':k==='app'?'checked':''} style="width:20px;height:20px;accent-color:var(--accent);margin-top:1px"><span>${l} <span style="color:var(--muted);font-weight:500">${n}</span>${hint?`<br><small style="color:var(--muted);font-weight:500">${hint}</small>`:''}</span></label>`;
@@ -1076,6 +1102,8 @@ function bindView(){
     if(!bt.dataset.sure){const A=bcBody();const n=[A.channels.app&&'приложение',A.channels.tg&&'Telegram',A.channels.email&&'почта',A.channels.post&&'пост в канале'].filter(Boolean).join(', ');
       bt.dataset.sure='1';bt.textContent='Точно отправить всем? ('+(n||'нет каналов')+')';setTimeout(()=>{if(bt.isConnected){delete bt.dataset.sure;bt.textContent='Отправить всем';}},5000);return;}
     bt.disabled=true;try{await api('admin/broadcasts',{body:bcBody()});toast('Рассылка запущена');render(true);}catch(x){er.textContent=x.message;er.hidden=false;bt.disabled=false;}});
+  const srcf=$('#srcf');if(srcf)srcf.addEventListener('submit',async e=>{e.preventDefault();const er=$('#src-err');er.hidden=true;
+    try{await api('admin/sources',{body:{name:$('#src-name').value,slug:$('#src-slug').value.trim().toLowerCase()}});toast('Ссылка создана');render(true);}catch(x){er.textContent=x.message;er.hidden=false;}});
   const pwf=$('#pwf');if(pwf)pwf.addEventListener('submit',async e=>{e.preventDefault();const err=$('#p-err');err.hidden=true;
     try{await api('me/password',{body:{old:$('#p-old').value,password:$('#p-new').value}});pwf.reset();toast('Пароль изменён. Другие устройства вышли из аккаунта');}
     catch(x){err.textContent=x.message;err.hidden=false;}});
@@ -1148,6 +1176,9 @@ document.addEventListener('click',async e=>{
     case 'followtab':followsSheet(a.dataset.h,a.dataset.k);break;
     case 'followinlist':{const h=a.dataset.h;const d=await api('users/'+encodeURIComponent(h)+'/follow',{body:{}});
       a.classList.toggle('pri',!d.user.isFollowing);a.textContent=d.user.isFollowing?'Вы подписаны':'Подписаться';toast(d.user.isFollowing?'Вы подписались на '+h:'Подписка отменена');break;}
+    case 'srcpreset':$('#src-name').value=a.dataset.l;$('#src-slug').value=a.dataset.k;$('#srcf').requestSubmit();break;
+    case 'srccopy':copyText($('#srcl-'+a.dataset.k).textContent,'Ссылка скопирована');break;
+    case 'srcdel':if(!a.dataset.sure){a.dataset.sure='1';toast('Нажмите ещё раз, чтобы удалить ссылку. Статистика по уже пришедшим сохранится');break;}await api('admin/sources/'+encodeURIComponent(a.dataset.k),{method:'DELETE'});render(true);break;
     case 'mailbox':S.mailBox=a.dataset.b;render(true);break;
     case 'newsemail':{const d=await api('me',{method:'PATCH',body:{newsEmail:a.checked}});ME=d.me;toast(a.checked?'Будем присылать новости Кадра':'Новости на почту отключены');break;}
     case 'bctest':{const f=$('#bcf');const er=$('#bc-err');er.hidden=true;

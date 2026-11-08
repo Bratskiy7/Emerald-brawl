@@ -381,7 +381,7 @@ route('POST', '/api/register', null, async (req, res) => {
   const off = official();
   const inviter = b.ref ? byHandle(String(b.ref).replace(/^@/, '')) : null;
   const u = { id: newId('u'), handle, name, bio: '', avatar: null, role: 'user', verified: false, follows: off ? [off.id] : [], saved: [], createdAt: Date.now(),
-    num: ++db.seq, invitedBy: inviter && !inviter.banned ? inviter.id : undefined, email, emailVerified: false, ...hashPw(pw) };
+    num: ++db.seq, invitedBy: inviter && !inviter.banned ? inviter.id : undefined, email, emailVerified: false, src: srcFrom(req, b), ...hashPw(pw) };
   if (inviter && !inviter.banned && !inviter.official) u.follows.push(inviter.id);
   db.users[u.id] = u; save();
   if (u.invitedBy) {
@@ -764,6 +764,55 @@ route('POST', '/api/support/:id', 'user', async (req, res, me, id) => {
 });
 
 /* admin */
+/* ---------------- traffic sources (/s/<slug>) ---------------- */
+db.sources = db.sources || {};
+const SRC_RE = /^[a-z0-9_-]{1,32}$/;
+const seenVisits = new Map(); // slug|ip|day -> 1 (unique visits per day)
+function ensureSource(slug, name) {
+  if (!SRC_RE.test(slug)) return null;
+  return db.sources[slug] ??= { slug, name: name || slug, createdAt: Date.now(), visits: 0, uniq: 0, auto: !name };
+}
+function srcFrom(req, b) {
+  const c = cookies(req).src; const v = String((b && b.src) || c || '').toLowerCase();
+  if (!SRC_RE.test(v)) return undefined;
+  ensureSource(v); return v;
+}
+function countVisit(slug, req) {
+  const s = ensureSource(slug); if (!s) return;
+  s.visits++;
+  const ip = (req.headers['x-forwarded-for'] || req.socket.remoteAddress || '').split(',')[0].trim();
+  const key = slug + '|' + ip + '|' + new Date().toISOString().slice(0, 10);
+  if (!seenVisits.has(key)) { seenVisits.set(key, 1); s.uniq++; if (seenVisits.size > 50000) seenVisits.clear(); }
+  save();
+}
+route('GET', '/api/admin/sources', 'admin', async (req, res) => {
+  const users = Object.values(db.users).filter(u => !u.official);
+  const hasPost = new Set(Object.values(db.posts).map(p => p.userId));
+  const week = Date.now() - 7 * 864e5;
+  const stat = list => ({ regs: list.length, active: list.filter(u => hasPost.has(u.id)).length, week: list.filter(u => u.createdAt > week).length });
+  const items = Object.values(db.sources).map(src => ({ ...src, ...stat(users.filter(u => u.src === src.slug)) }))
+    .sort((a, b) => b.regs - a.regs || b.uniq - a.uniq || b.createdAt - a.createdAt);
+  send(res, 200, { items, invited: stat(users.filter(u => u.invitedBy && !u.src)), direct: stat(users.filter(u => !u.invitedBy && !u.src)), base: BASE || '' });
+});
+route('POST', '/api/admin/sources', 'admin', async (req, res) => {
+  const b = await readJson(req);
+  const slug = String(b.slug || '').trim().toLowerCase(); const name = clean(b.name, 60);
+  need(SRC_RE.test(slug), 400, 'Метка: латиница, цифры, - и _, до 32 символов');
+  need(name, 400, 'Укажите название');
+  const ex = db.sources[slug];
+  if (ex) { need(ex.auto, 409, 'Такая метка уже есть'); ex.name = name; ex.auto = false; }
+  else db.sources[slug] = { slug, name, createdAt: Date.now(), visits: 0, uniq: 0, auto: false };
+  save(); send(res, 200, { ok: true });
+});
+route('DELETE', '/api/admin/sources/:slug', 'admin', async (req, res, me, slug) => {
+  delete db.sources[decodeURIComponent(slug)]; save(); send(res, 200, { ok: true });
+});
+route('POST', '/api/visit', null, async (req, res) => {
+  const b = await readJson(req); const v = String(b.src || '').toLowerCase();
+  if (SRC_RE.test(v) && !limited(req, 'visit', 30, 3600e3)) countVisit(v, req);
+  send(res, 200, { ok: true });
+});
+
 route('GET', '/api/admin/stats', 'admin', async (req, res) => {
   const day = Date.now() - 864e5; const posts = Object.values(db.posts); const users = Object.values(db.users); const tk = Object.values(db.tickets);
   send(res, 200, { users: users.length, newUsers: users.filter(u => u.createdAt > day).length, verified: users.filter(u => u.verified).length, banned: users.filter(u => u.banned).length,
@@ -979,6 +1028,13 @@ const server = http.createServer(async (req, res) => {
       return fail(res, 404, 'Нет такого адреса');
     }
     if (req.method !== 'GET' && req.method !== 'HEAD' && url !== '/unsubscribe') return fail(res, 405, 'Метод не поддерживается');
+    const sm = /^\/s\/([a-z0-9_-]{1,32})\/?$/i.exec(url);
+    if (sm && (req.method === 'GET' || req.method === 'HEAD')) {
+      const slug = sm[1].toLowerCase(); countVisit(slug, req);
+      const secure = req.headers['x-forwarded-proto'] === 'https' ? '; Secure' : '';
+      res.writeHead(302, { Location: '/?src=' + slug, 'Set-Cookie': `src=${slug}; Path=/; Max-Age=2592000; SameSite=Lax${secure}`, 'Cache-Control': 'no-store' });
+      return res.end();
+    }
     if (url === '/unsubscribe') {
       const q = new URL(req.url, 'http://x').searchParams; const u = db.users[q.get('u')];
       const ok = u && q.get('t') && crypto.timingSafeEqual(Buffer.from(unsubToken(u.id)), Buffer.from(String(q.get('t')).padEnd(32).slice(0, 32)));
