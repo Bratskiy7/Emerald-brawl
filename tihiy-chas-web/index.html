@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Тихий час</title>
+<style>
+:root{--bg:#10131a;--card:#181d28;--tx:#e8ecf4;--mut:#8a94a8;--ac:#6ee7b7;--warn:#fbbf24;--red:#f87171}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--tx);font:16px/1.5 system-ui,sans-serif;padding:16px}
+main{max-width:720px;margin:auto;display:grid;gap:16px}
+h1{margin:8px 0 0;font-size:22px}h2{margin:0 0 10px;font-size:16px;color:var(--mut);font-weight:600}
+.card{background:var(--card);border-radius:14px;padding:18px}
+.timer{font-size:64px;font-weight:700;text-align:center;font-variant-numeric:tabular-nums}
+.state{text-align:center;color:var(--mut)}
+.row{display:flex;gap:8px;flex-wrap:wrap;justify-content:center;margin-top:12px}
+button{background:#252c3b;color:var(--tx);border:0;border-radius:10px;padding:10px 16px;font:inherit;cursor:pointer}
+button.p{background:var(--ac);color:#06281c;font-weight:600}
+button:hover{filter:brightness(1.15)}
+input{background:#10131a;color:var(--tx);border:1px solid #2c3446;border-radius:8px;padding:8px;font:inherit;width:100%}
+.msg{display:flex;justify-content:space-between;gap:8px;padding:6px 0;border-bottom:1px solid #232a3a;font-size:14px}
+.msg b{color:var(--warn)}.urgent b{color:var(--red)}
+.heat{display:grid;grid-template-columns:repeat(24,1fr);gap:2px}
+.heat div{aspect-ratio:1;border-radius:3px;background:#222a3a}
+.lbl{display:flex;justify-content:space-between;color:var(--mut);font-size:12px;margin-top:4px}
+.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;text-align:center}
+.stats b{display:block;font-size:24px;color:var(--ac)}
+small{color:var(--mut)}
+</style>
+</head>
+<body>
+<main>
+<h1>🎧 Тихий час</h1>
+
+<section class="card">
+  <div class="state" id="state">Готов к фокусу</div>
+  <div class="timer" id="time">25:00</div>
+  <div class="state" id="hint"></div>
+  <div class="row">
+    <button class="p" id="start">Старт</button>
+    <button id="distract">Отвлёкся (+1)</button>
+    <button id="stop">Завершить</button>
+  </div>
+</section>
+
+<section class="card">
+  <h2>Уведомления (симуляция)</h2>
+  <small>В фокусе несрочное копится, срочное (слова: срочно, авария, мама, прод упал) проходит сразу.</small>
+  <div class="row" style="justify-content:flex-start">
+    <input id="txt" placeholder="Текст сообщения, например: «срочно позвони»">
+    <button id="send">Прислать</button>
+  </div>
+  <div id="live"></div>
+  <h2 style="margin-top:14px">Отложено: <span id="qn">0</span></h2>
+  <div id="queue"></div>
+  <div class="row" style="justify-content:flex-start"><button id="flush">Показать пачкой</button></div>
+</section>
+
+<section class="card">
+  <h2>Отчёт за сегодня</h2>
+  <div class="stats">
+    <div><b id="sMin">0</b>мин фокуса</div>
+    <div><b id="sSes">0</b>сессий</div>
+    <div><b id="sDis">0</b>отвлечений</div>
+  </div>
+  <h2 style="margin-top:16px">Карта внимания по часам</h2>
+  <div class="heat" id="heat"></div>
+  <div class="lbl"><span>0</span><span>6</span><span>12</span><span>18</span><span>23</span></div>
+  <p id="tip"></p>
+</section>
+</main>
+<script>
+const KEY='tihiy-chas', $=id=>document.getElementById(id);
+const URG=/срочно|авария|мама|прод упал|urgent/i;
+let db; try{db=JSON.parse(localStorage.getItem(KEY))}catch(e){}
+db=db||{sessions:[],queue:[]};
+const save=()=>{try{localStorage.setItem(KEY,JSON.stringify(db))}catch(e){}};
+const today=()=>new Date().toDateString();
+
+// адаптивная длина: по завершённым сессиям с малым числом отвлечений
+function planned(){
+  const good=db.sessions.filter(s=>s.done&&s.dis<=1).slice(-5);
+  if(good.length<2)return 25;
+  const avg=good.reduce((a,s)=>a+s.plan,0)/good.length;
+  return Math.min(50,Math.max(15,Math.round((avg+5)/5)*5));
+}
+let cur=null,tick=null;
+const fmt=s=>String(Math.floor(s/60)).padStart(2,'0')+':'+String(s%60).padStart(2,'0');
+
+function idle(){$('time').textContent=fmt(planned()*60);$('hint').textContent='Адаптивная длина сессии: '+planned()+' мин';}
+$('start').onclick=()=>{
+  if(cur)return;
+  const plan=planned();
+  cur={start:Date.now(),plan,left:plan*60,dis:0};
+  $('state').textContent='🔕 Тихий режим включён';
+  tick=setInterval(()=>{cur.left--;$('time').textContent=fmt(cur.left);if(cur.left<=0)end(true)},1000);
+  $('time').textContent=fmt(cur.left);
+};
+$('distract').onclick=()=>{if(cur){cur.dis++;$('hint').textContent='Отвлечений: '+cur.dis}};
+$('stop').onclick=()=>cur&&end(false);
+function end(done){
+  clearInterval(tick);
+  const mins=Math.round((plannedSecs()-cur.left)/60);
+  db.sessions.push({t:cur.start,plan:cur.plan,mins:done?cur.plan:mins,dis:cur.dis,done});
+  cur=null;save();
+  $('state').textContent=done?'✅ Сессия завершена':'Остановлено';
+  flush();idle();render();
+}
+const plannedSecs=()=>cur.plan*60;
+
+// уведомления
+function send(text){
+  if(!text)return;
+  const urgent=URG.test(text), t=new Date().toLocaleTimeString().slice(0,5);
+  if(cur&&!urgent){db.queue.push({text,t});save();renderQ();}
+  else{
+    const d=document.createElement('div');d.className='msg'+(urgent?' urgent':'');
+    d.innerHTML='<span></span><b>'+(urgent?'СРОЧНО':'сейчас')+'</b>';d.firstChild.textContent=text;
+    $('live').prepend(d);
+  }
+}
+$('send').onclick=()=>{send($('txt').value.trim());$('txt').value=''};
+$('txt').onkeydown=e=>{if(e.key==='Enter')$('send').click()};
+function flush(){
+  db.queue.forEach(m=>{const d=document.createElement('div');d.className='msg';
+    d.innerHTML='<span></span><b>пачка '+m.t+'</b>';d.firstChild.textContent=m.text;$('live').prepend(d)});
+  db.queue=[];save();renderQ();
+}
+$('flush').onclick=flush;
+function renderQ(){
+  $('qn').textContent=db.queue.length;
+  $('queue').innerHTML='';
+  db.queue.forEach(m=>{const d=document.createElement('div');d.className='msg';
+    d.innerHTML='<span></span><small>'+m.t+'</small>';d.firstChild.textContent=m.text;$('queue').append(d)});
+}
+
+// отчёт
+function render(){
+  const ss=db.sessions.filter(s=>new Date(s.t).toDateString()===today());
+  const min=ss.reduce((a,s)=>a+s.mins,0), dis=ss.reduce((a,s)=>a+s.dis,0);
+  $('sMin').textContent=min;$('sSes').textContent=ss.length;$('sDis').textContent=dis;
+  const h=Array(24).fill(0);
+  ss.forEach(s=>{let t=s.t,m=s.mins;while(m>0){const hr=new Date(t).getHours();h[hr]+=Math.min(m,60);t+=3600e3;m-=60}});
+  const mx=Math.max(...h,1);
+  $('heat').innerHTML='';
+  h.forEach((v,i)=>{const d=document.createElement('div');d.title=i+':00 — '+v+' мин';
+    if(v)d.style.background='rgba(110,231,183,'+(0.25+0.75*v/mx)+')';$('heat').append(d)});
+  let tip='Запусти первую сессию, чтобы получить совет.';
+  if(ss.length){
+    const r=dis/Math.max(1,ss.length);
+    tip=r>2?'Много отвлечений: попробуй сессии покороче и убери телефон из зоны видимости.'
+        :min>=90?'Отличный день: больше полутора часов глубокой работы 🎯'
+        :'Хороший ритм. Следующая сессия будет чуть длиннее, если отвлечений мало.';
+  }
+  $('tip').textContent=tip;
+}
+idle();renderQ();render();
+</script>
+</body>
+</html>
